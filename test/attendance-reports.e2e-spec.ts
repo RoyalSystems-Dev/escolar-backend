@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { expectReportAuditTrail } from './helpers/report-audit.e2e-helper';
 
 describe('Attendance reports (e2e)', () => {
   let app: INestApplication<App>;
@@ -75,5 +76,29 @@ describe('Attendance reports (e2e)', () => {
         expect(res.body.meta.tipo).toBe('asistencia_resumen');
         expect(Array.isArray(res.body.items)).toBe(true);
       });
+  });
+
+  it('consulta y exportación de asistencia registran bitácora', async () => {
+    const token = await login('admin');
+    const server = app.getHttpServer();
+    const mes = new Date().toISOString().slice(0, 7);
+    const qs = `tipo=asistencia_resumen&mes=${mes}&institutionId=1`;
+
+    await request(server)
+      .get(`/api/v1/attendance-reports?${qs}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await request(server)
+      .get(`/api/v1/attendance-reports/export?${qs}&format=csv`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await expectReportAuditTrail(server, token, {
+      modulo: 'asistencia',
+      entidad: 'reporte',
+      descripcionExportIncludes: 'asistencia_resumen',
+      descripcionConsultIncludes: 'asistencia_resumen',
+    });
   });
 });

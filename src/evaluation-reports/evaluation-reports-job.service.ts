@@ -22,6 +22,7 @@ import {
 import { EvaluationReportsExportService } from './evaluation-reports-export.service';
 import type { ReportScope } from './evaluation-reports-scope.util';
 import { EvaluationReportsService } from './evaluation-reports.service';
+import { auditReportJobProcessingFailed } from '../reports-common/reports-audit.util';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'evaluation-reports');
 
@@ -164,6 +165,19 @@ export class EvaluationReportsJobService implements OnModuleInit, OnModuleDestro
         errorMensaje: message,
         completedAt: new Date(),
       });
+      const failed = await this.jobRepo.findOne({ where: { id: jobId } });
+      if (failed) {
+        auditReportJobProcessingFailed(
+          this.auditLogger,
+          req,
+          'evaluacion',
+          scope,
+          jobId,
+          failed.reportType,
+          failed.format,
+          message,
+        );
+      }
     }
   }
 

@@ -327,11 +327,7 @@ export class EnrollmentReportsService {
         estado: query.estadoMatricula,
       });
     }
-    if (query.anio) {
-      qb.andWhere('s.anioIngreso = :anioIngreso', {
-        anioIngreso: String(query.anio),
-      });
-    }
+    // query.anio = año escolar del reporte (meta); no filtra anioIngreso del estudiante.
 
     return qb
       .orderBy('s.apellido', 'ASC')

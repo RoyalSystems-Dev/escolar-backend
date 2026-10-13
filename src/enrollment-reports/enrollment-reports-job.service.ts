@@ -21,6 +21,7 @@ import {
 } from './enrollment-reports.constants';
 import { EnrollmentReportsExportService } from './enrollment-reports-export.service';
 import { EnrollmentReportsService } from './enrollment-reports.service';
+import { auditReportJobProcessingFailed } from '../reports-common/reports-audit.util';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'enrollment-reports');
 
@@ -161,6 +162,19 @@ export class EnrollmentReportsJobService implements OnModuleInit, OnModuleDestro
         errorMensaje: message,
         completedAt: new Date(),
       });
+      const failed = await this.jobRepo.findOne({ where: { id: jobId } });
+      if (failed) {
+        auditReportJobProcessingFailed(
+          this.auditLogger,
+          req,
+          'matricula',
+          scope,
+          jobId,
+          failed.reportType,
+          failed.format,
+          message,
+        );
+      }
     }
   }
 

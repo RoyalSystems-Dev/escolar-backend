@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -124,6 +125,8 @@ export class HorariosService {
     private readonly curriculaService: CurriculaService,
   ) {}
 
+  private readonly logger = new Logger(HorariosService.name);
+
   /** Solo desarrollo: preferir npm run db:horarios-data para cargar datos en PostgreSQL. */
   async seedDemoHorarios(
     anioEscolar: number,
@@ -139,7 +142,7 @@ export class HorariosService {
     await this.ensureHorarioAssignments(anioEscolar);
     const inserted = await this.seedHorarioBlocks(anioEscolar);
     if (inserted > 0) {
-      console.log(`[horarios] ${inserted} bloques demo insertados para A.E. ${anioEscolar}`);
+      this.logger.log(`${inserted} bloques demo insertados para A.E. ${anioEscolar}`);
     }
     return { blocks: inserted || existing, reseeded: inserted > 0 };
   }

@@ -72,25 +72,47 @@ export class ConductIncidentsService {
     resumenPage = 1,
     resumenPageSize = 10,
   ): Promise<ConductIncidentsPage> {
-    const all = await this.buildFilteredList(filters);
-    const kpis = buildConductKpis(all);
-    let resumenAll = buildConductResumen(all);
+    /** Alcance común (grado, búsqueda, etc.) sin tipo/estado: KPIs y columnas del resumen. */
+    const scopeFilters: ConductIncidentFilters = {
+      ...filters,
+      tipo: undefined,
+      estado: undefined,
+    };
+    const scopeAll = await this.buildFilteredList(scopeFilters);
+
+    const kpis = buildConductKpis(scopeAll);
+    let resumenAll = buildConductResumen(scopeAll);
 
     if (filters.nivel && filters.nivel !== 'todos') {
       resumenAll = resumenAll.filter((r) => r.nivel === filters.nivel);
     }
 
-    const grados = [...new Set(all.map((i) => i.grado).filter(Boolean))].sort();
+    let listAll = [...scopeAll];
+    if (filters.tipo && filters.tipo !== 'todos') {
+      listAll = listAll.filter((i) => i.tipo === filters.tipo);
+    }
+    if (filters.estado && filters.estado !== 'todos') {
+      listAll = listAll.filter((i) => i.estado === filters.estado);
+    }
+
+    const alumnoIdsConIncidenciaFiltrada = new Set(
+      listAll.map((i) => i.alumnoId),
+    );
+    const resumenVisible = resumenAll.filter((r) =>
+      alumnoIdsConIncidenciaFiltrada.has(r.alumnoId),
+    );
+
+    const grados = [...new Set(scopeAll.map((i) => i.grado).filter(Boolean))].sort();
 
     const safePageSize = Math.min(100, Math.max(1, pageSize));
-    const total = all.length;
+    const total = listAll.length;
     const totalPages = Math.max(1, Math.ceil(total / safePageSize));
     const safePage = Math.min(Math.max(1, page), totalPages);
     const start = (safePage - 1) * safePageSize;
-    const items = all.slice(start, start + safePageSize);
+    const items = listAll.slice(start, start + safePageSize);
 
     const safeResumenPageSize = Math.min(100, Math.max(1, resumenPageSize));
-    const resumenTotal = resumenAll.length;
+    const resumenTotal = resumenVisible.length;
     const resumenTotalPages = Math.max(
       1,
       Math.ceil(resumenTotal / safeResumenPageSize),
@@ -100,7 +122,7 @@ export class ConductIncidentsService {
       resumenTotalPages,
     );
     const resumenStart = (safeResumenPage - 1) * safeResumenPageSize;
-    const resumen = resumenAll.slice(
+    const resumen = resumenVisible.slice(
       resumenStart,
       resumenStart + safeResumenPageSize,
     );

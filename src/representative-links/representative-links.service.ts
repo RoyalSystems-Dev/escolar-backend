@@ -66,15 +66,12 @@ export class RepresentativeLinksService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async getContext(): Promise<RepresentativeLinksContext> {
-    let institution = await this.institutionRepo.findOne({
-      where: {},
-      order: { id: 'ASC' },
+  async getContext(institutionId: number): Promise<RepresentativeLinksContext> {
+    const institution = await this.institutionRepo.findOne({
+      where: { id: institutionId },
     });
     if (!institution) {
-      institution = await this.institutionRepo.save(
-        this.institutionRepo.create({}),
-      );
+      throw new NotFoundException('Institución no encontrada');
     }
     return {
       institucion: {

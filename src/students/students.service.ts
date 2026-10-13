@@ -2623,7 +2623,14 @@ export class StudentsService implements OnModuleInit {
   private async resolveInstitutionId(
     auditCtx?: StudentAuditContext,
   ): Promise<number | null> {
-    const user = (auditCtx?.req as { user?: { institutionId?: number | null } } | undefined)?.user;
+    const req = auditCtx?.req as
+      | { user?: { institutionId?: number | null; roles?: string[]; rolPrincipal?: string } }
+      | undefined;
+    const user = req?.user;
+    if (user) {
+      const scoped = institutionIdDeAlcance(user as never, req as never);
+      if (scoped != null && scoped > 0) return scoped;
+    }
     if (user?.institutionId) return user.institutionId;
     const institution = await this.institutionRepo.findOne({
       where: {},

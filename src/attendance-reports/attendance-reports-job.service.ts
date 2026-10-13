@@ -21,6 +21,7 @@ import {
 } from './attendance-reports.constants';
 import { AttendanceReportsExportService } from './attendance-reports-export.service';
 import { AttendanceReportsService } from './attendance-reports.service';
+import { auditReportJobProcessingFailed } from '../reports-common/reports-audit.util';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'attendance-reports');
 
@@ -161,6 +162,19 @@ export class AttendanceReportsJobService implements OnModuleInit, OnModuleDestro
         errorMensaje: message,
         completedAt: new Date(),
       });
+      const failed = await this.jobRepo.findOne({ where: { id: jobId } });
+      if (failed) {
+        auditReportJobProcessingFailed(
+          this.auditLogger,
+          req,
+          'asistencia',
+          scope,
+          jobId,
+          failed.reportType,
+          failed.format,
+          message,
+        );
+      }
     }
   }
 

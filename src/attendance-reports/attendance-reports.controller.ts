@@ -25,6 +25,10 @@ import {
 import { AttendanceReportsExportService } from './attendance-reports-export.service';
 import { AttendanceReportsJobService } from './attendance-reports-job.service';
 import { AttendanceReportsService } from './attendance-reports.service';
+import {
+  auditReportExportSyncRejected,
+  auditReportJobDownloadNotReady,
+} from '../reports-common/reports-audit.util';
 
 type AuthRequest = Request & { user?: RequestUser };
 
@@ -88,6 +92,16 @@ export class AttendanceReportsController {
     const report = await this.reportsService.buildReport(fullQuery, scope);
 
     if (report.pagination.totalItems > SYNC_EXPORT_MAX_ROWS) {
+      auditReportExportSyncRejected(
+        this.auditLogger,
+        req,
+        'asistencia',
+        scope,
+        normalized.tipo,
+        query.format,
+        report.pagination.totalItems,
+        SYNC_EXPORT_MAX_ROWS,
+      );
       res.status(400).json({
         message: `El reporte supera ${SYNC_EXPORT_MAX_ROWS} filas. Use exportación asíncrona (POST /attendance-reports/jobs).`,
         totalFilas: report.pagination.totalItems,
@@ -208,6 +222,15 @@ export class AttendanceReportsController {
     const scope = await this.reportsService.resolveScope(req, dre, ugel);
     const job = await this.jobService.findJob(+id, scope);
     if (job.status !== 'completed' || !job.archivoNombre) {
+      auditReportJobDownloadNotReady(
+        this.auditLogger,
+        req,
+        'asistencia',
+        scope,
+        job.id,
+        job.status,
+        job.errorMensaje,
+      );
       res.status(409).json({
         message: 'El reporte aún no está listo para descarga',
         status: job.status,

@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { RequirePermiso } from '../auth/decorators/require-permiso.decorator';
+import { TenantInstitution } from '../auth/decorators/tenant-institution.decorator';
 import { RequestUser } from '../auth/interfaces/request-user.interface';
 import {
   AssociateStudentsDto,
@@ -31,8 +32,8 @@ export class RepresentativeLinksController {
   constructor(private readonly service: RepresentativeLinksService) {}
 
   @Get('context')
-  getContext() {
-    return this.service.getContext();
+  getContext(@TenantInstitution() institutionId: number) {
+    return this.service.getContext(institutionId);
   }
 
   @Get('by-document')

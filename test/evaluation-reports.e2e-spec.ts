@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { expectReportAuditTrail } from './helpers/report-audit.e2e-helper';
 
 describe('Evaluation reports (e2e)', () => {
   let app: INestApplication<App>;
@@ -178,5 +179,47 @@ describe('Evaluation reports (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .expect(200)
       .expect('Content-Type', /text\/csv/);
+  });
+
+  it('consulta y exportación de evaluación registran bitácora', async () => {
+    const token = await login('admin');
+    const server = app.getHttpServer();
+    const ctxRes = await request(server)
+      .get('/api/v1/grades/registry/contexts?bimestre=2')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const contexts = ctxRes.body.contexts as Array<{
+      nivel: string;
+      grado: string;
+      seccion: string;
+    }>;
+    if (!contexts.length) return;
+
+    const ctx = contexts[0];
+    const reportQs = new URLSearchParams({
+      tipo: 'promedios',
+      nivel: ctx.nivel,
+      grado: ctx.grado,
+      seccion: ctx.seccion,
+      institutionId: '1',
+    }).toString();
+
+    await request(server)
+      .get(`/api/v1/evaluation-reports?${reportQs}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await request(server)
+      .get(`/api/v1/evaluation-reports/export?${reportQs}&format=csv`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await expectReportAuditTrail(server, token, {
+      modulo: 'evaluacion',
+      entidad: 'reporte',
+      descripcionExportIncludes: 'promedios',
+      descripcionConsultIncludes: 'promedios',
+    });
   });
 });

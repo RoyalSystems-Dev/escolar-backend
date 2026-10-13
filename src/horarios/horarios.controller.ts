@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
@@ -23,6 +24,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermisoGuard } from '../auth/guards/permiso.guard';
 import { RequirePermiso } from '../auth/decorators/require-permiso.decorator';
+import { isDevelopmentRuntime } from '../config/runtime-env.util';
 
 @Controller('horarios')
 @UseGuards(JwtAuthGuard)
@@ -99,6 +101,9 @@ export class HorariosController {
     @Query('anioEscolar') anioEscolar?: string,
     @Query('force') force?: string,
   ) {
+    if (!isDevelopmentRuntime()) {
+      throw new ForbiddenException('Seed de horarios no disponible fuera de desarrollo');
+    }
     const anio = anioEscolar ? +anioEscolar : new Date().getFullYear();
     return this.horariosService.seedDemoHorarios(anio, force === 'true');
   }

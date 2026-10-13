@@ -8,6 +8,9 @@ import {
   TerritorialReportQueryDto,
   normalizeTerritorialReportQuery,
 } from './dto/territorial-report-query.dto';
+import {
+  auditReportExportSyncRejected,
+} from '../reports-common/reports-audit.util';
 import { SYNC_EXPORT_MAX_ROWS } from './territorial-reports.constants';
 import { TerritorialReportsExportService } from './territorial-reports-export.service';
 import { TerritorialReportsService } from './territorial-reports.service';
@@ -49,7 +52,7 @@ export class TerritorialReportsController {
 
     this.auditLogger.logFromRequestContext(req, {
       accion: 'consultar',
-      modulo: 'reportes',
+      modulo: 'territorial',
       entidad: 'reporte_territorial',
       descripcion: 'Consultó reporte territorial UGEL/DRE',
       institutionId: scope.primaryInstitutionId,
@@ -81,6 +84,16 @@ export class TerritorialReportsController {
     );
 
     if (report.pagination.totalItems > SYNC_EXPORT_MAX_ROWS) {
+      auditReportExportSyncRejected(
+        this.auditLogger,
+        req,
+        'territorial',
+        scope,
+        normalized.tipo,
+        query.format,
+        report.pagination.totalItems,
+        SYNC_EXPORT_MAX_ROWS,
+      );
       res.status(400).json({
         message: `El reporte supera ${SYNC_EXPORT_MAX_ROWS} filas.`,
         totalFilas: report.pagination.totalItems,
@@ -95,7 +108,7 @@ export class TerritorialReportsController {
 
     this.auditLogger.logFromRequestContext(req, {
       accion: 'exportar',
-      modulo: 'reportes',
+      modulo: 'territorial',
       entidad: 'reporte_territorial',
       descripcion: `Exportó reporte territorial (${query.format})`,
       institutionId: scope.primaryInstitutionId,

@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { expectReportAuditTrail } from './helpers/report-audit.e2e-helper';
 
 describe('Enrollment reports (e2e)', () => {
   let app: INestApplication<App>;
@@ -88,5 +89,29 @@ describe('Enrollment reports (e2e)', () => {
         expect(res.body.meta.tipo).toBe('matricula_resumen');
         expect(res.body.meta.fuente).toBe('agregado_students_por_aula');
       });
+  });
+
+  it('consulta y exportación de matrícula registran bitácora', async () => {
+    const token = await login('admin');
+    const server = app.getHttpServer();
+
+    await request(server)
+      .get('/api/v1/enrollment-reports?tipo=matricula_global&institutionId=1')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await request(server)
+      .get(
+        '/api/v1/enrollment-reports/export?tipo=matricula_global&institutionId=1&format=csv',
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await expectReportAuditTrail(server, token, {
+      modulo: 'matricula',
+      entidad: 'reporte',
+      descripcionExportIncludes: 'matricula_global',
+      descripcionConsultIncludes: 'matricula_global',
+    });
   });
 });

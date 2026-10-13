@@ -355,17 +355,17 @@ export class CurriculaService implements OnModuleInit {
               `Competencias MINEDU aplicadas: ${sub.nombre} (${curr.nivel} ${curr.anio}) → ${expected}`,
             );
           } catch (err) {
-            console.warn(
-              `[curricula] sync MINEDU omitido para curso ${sub.id} (${sub.nombre}):`,
-              err instanceof Error ? err.message : err,
+            this.logger.warn(
+              `sync MINEDU omitido para curso ${sub.id} (${sub.nombre}): ${
+                err instanceof Error ? err.message : String(err)
+              }`,
             );
           }
         }
       }
     } catch (err) {
-      console.warn(
-        '[curricula] sync MINEDU no completado:',
-        err instanceof Error ? err.message : err,
+      this.logger.warn(
+        `sync MINEDU no completado: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
