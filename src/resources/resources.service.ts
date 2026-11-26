@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { existsSync } from 'fs';
+import { basename, join, resolve, sep } from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Task } from '../tasks/entities/task.entity';
@@ -103,6 +105,29 @@ export class ResourcesService {
   async findOne(id: number): Promise<ResourceResponse> {
     const resource = await this.getOrFail(id);
     return this.toResponse(resource);
+  }
+
+  async resolveDownload(id: number): Promise<{ abs: string; mime: string; name: string }> {
+    const resource = await this.getOrFail(id);
+    const url = (resource.url ?? '').replace(/\\/g, '/').trim();
+    if (!url.startsWith('/uploads/') || url.includes('..')) {
+      throw new NotFoundException('Este recurso no tiene un archivo descargable');
+    }
+
+    const root = resolve(join(process.cwd(), 'uploads'));
+    const abs = resolve(join(root, url.slice('/uploads/'.length)));
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      throw new NotFoundException('Archivo no encontrado');
+    }
+    if (!existsSync(abs)) {
+      throw new NotFoundException('No se encontró el archivo del recurso');
+    }
+
+    return {
+      abs,
+      mime: resource.mimeType || 'application/octet-stream',
+      name: resource.nombreArchivo?.trim() || basename(abs),
+    };
   }
 
   async update(id: number, dto: UpdateResourceDto): Promise<ResourceResponse> {

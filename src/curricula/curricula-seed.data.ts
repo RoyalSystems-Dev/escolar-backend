@@ -15,7 +15,6 @@ export const CURRICULA_SEED_DATA = {
     { anio: 2026, nivel: 'Secundaria', estado: 'activo' as CurriculumEstado, version: '1.1', tipoEscala: 'numerica' as CurriculumTipoEscala, tipoPeriodo: 'bimestral' as CurriculumTipoPeriodo, fechaCreacion: '2026-01-10' },
     { anio: 2025, nivel: 'Primaria', estado: 'inactivo' as CurriculumEstado, version: '1.0', tipoEscala: 'numerica' as CurriculumTipoEscala, tipoPeriodo: 'trimestral' as CurriculumTipoPeriodo, fechaCreacion: '2025-01-08' },
     { anio: 2025, nivel: 'Secundaria', estado: 'inactivo' as CurriculumEstado, version: '1.0', tipoEscala: 'numerica' as CurriculumTipoEscala, tipoPeriodo: 'trimestral' as CurriculumTipoPeriodo, fechaCreacion: '2025-01-08' },
-    { anio: 2026, nivel: 'Inicial', estado: 'borrador' as CurriculumEstado, version: '2.0', tipoEscala: 'competencia' as CurriculumTipoEscala, tipoPeriodo: 'bimestral' as CurriculumTipoPeriodo, fechaCreacion: '2026-03-15' },
   ],
   areas: [
     { nombre: 'Comunicación', nivel: 'Inicial', orden: 1, colorClass: 'bg-blue-50 border-blue-200 text-blue-800', dotClass: 'bg-blue-500' },

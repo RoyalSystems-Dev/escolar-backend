@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateEventDto, UpdateEventDto } from './dto/event.dto';
@@ -14,6 +14,7 @@ import {
   canceladoFromEstado,
   computeEstadoFromDates,
   normalizeEventEstado,
+  toEventDateYmd,
 } from './event-estado.util';
 
 export interface EventResponse {
@@ -49,6 +50,7 @@ export class EventsService {
   ) {}
 
   create(dto: CreateEventDto, institutionId?: number): Promise<EventResponse> {
+    const ie = this.requireInstitutionId(institutionId);
     const vis = normalizeEventVisibility(dto);
     const fechaFin = dto.fechaFin ?? dto.fechaInicio;
     const estado = normalizeEventEstado({
@@ -74,7 +76,7 @@ export class EventsService {
       publicado: dto.publicado ?? true,
       estado,
       cancelado: canceladoFromEstado(estado),
-      institutionId: institutionId ?? null,
+      institutionId: ie,
     });
     return this.eventsRepo.save(entity).then((saved) => this.toResponse(saved));
   }
@@ -94,9 +96,8 @@ export class EventsService {
       .orderBy('e.fechaInicio', 'ASC')
       .addOrderBy('e.horaInicio', 'ASC');
 
-    if (query?.institutionId !== undefined) {
-      qb.andWhere('e.institutionId = :institutionId', { institutionId: query.institutionId });
-    }
+    const ie = this.requireInstitutionId(query?.institutionId);
+    qb.andWhere('e.institutionId = :institutionId', { institutionId: ie });
     if (query?.mes) {
       qb.andWhere("TO_CHAR(e.fechaInicio, 'YYYY-MM') = :mes", { mes: query.mes });
     }
@@ -129,30 +130,55 @@ export class EventsService {
   }
 
   async findOne(id: number, institutionId?: number): Promise<EventResponse> {
-    const event = await this.getOrFail(id, institutionId);
+    const ie = this.requireInstitutionId(institutionId);
+    const event = await this.getOrFail(id, ie);
     return this.toResponse(event);
   }
 
   async update(id: number, dto: UpdateEventDto, institutionId?: number): Promise<EventResponse> {
-    const current = await this.getOrFail(id, institutionId);
-    Object.assign(current, {
-      ...dto,
-      titulo: dto.titulo !== undefined ? dto.titulo.trim() : current.titulo,
-      descripcion:
-        dto.descripcion !== undefined ? dto.descripcion.trim() : current.descripcion,
-      lugar: dto.lugar !== undefined ? dto.lugar.trim() : current.lugar,
-      responsable:
-        dto.responsable !== undefined ? dto.responsable.trim() : current.responsable,
-      nivel: dto.nivel !== undefined ? dto.nivel.trim() : current.nivel,
-      horaInicio:
-        dto.horaInicio !== undefined ? dto.horaInicio.trim() : current.horaInicio,
-      horaFin: dto.horaFin !== undefined ? dto.horaFin?.trim() || null : current.horaFin,
-    });
+    const ie = this.requireInstitutionId(institutionId);
+    const current = await this.getOrFail(id, ie);
+    if (current.institutionId == null) {
+      current.institutionId = ie;
+    }
+
+    if (dto.titulo !== undefined) current.titulo = dto.titulo.trim();
+    if (dto.descripcion !== undefined) current.descripcion = dto.descripcion.trim();
+    if (dto.tipo !== undefined) current.tipo = dto.tipo as Evento['tipo'];
+    if (dto.fechaInicio !== undefined) {
+      current.fechaInicio = toEventDateYmd(dto.fechaInicio);
+    }
+    if (dto.fechaFin !== undefined) {
+      current.fechaFin = dto.fechaFin ? toEventDateYmd(dto.fechaFin) : null;
+    }
+    if (dto.lugar !== undefined) current.lugar = dto.lugar.trim();
+    if (dto.responsable !== undefined) current.responsable = dto.responsable.trim();
+    if (dto.nivel !== undefined) current.nivel = dto.nivel.trim();
+    if (dto.grado !== undefined) current.grado = dto.grado.trim();
+    if (dto.seccion !== undefined) current.seccion = dto.seccion.trim();
+    if (dto.horaInicio !== undefined) current.horaInicio = dto.horaInicio.trim();
+    if (dto.horaFin !== undefined) {
+      current.horaFin = dto.horaFin?.trim() || null;
+    }
+    if (dto.destinatarios !== undefined) {
+      current.destinatarios = dto.destinatarios as Evento['destinatarios'];
+    }
+    if (dto.publicado !== undefined) current.publicado = dto.publicado;
+    if (dto.visibilidad !== undefined) {
+      current.visibilidad = dto.visibilidad as Evento['visibilidad'];
+    }
+
+    current.fechaInicio = toEventDateYmd(current.fechaInicio);
+    current.fechaFin = current.fechaFin ? toEventDateYmd(current.fechaFin) : null;
 
     if (dto.estado !== undefined || dto.cancelado !== undefined) {
+      const canceladoFlag =
+        dto.estado !== undefined
+          ? dto.estado === 'cancelado'
+          : (dto.cancelado ?? current.cancelado);
       const estado = normalizeEventEstado({
         estado: dto.estado ?? current.estado,
-        cancelado: dto.cancelado ?? current.cancelado,
+        cancelado: canceladoFlag,
         fechaInicio: current.fechaInicio,
         fechaFin: current.fechaFin,
       });
@@ -160,6 +186,8 @@ export class EventsService {
       current.cancelado = canceladoFromEstado(estado);
       if (estado === 'cancelado') {
         current.publicado = false;
+      } else if (dto.estado !== undefined && dto.publicado === undefined) {
+        current.publicado = true;
       }
     }
 
@@ -168,15 +196,30 @@ export class EventsService {
   }
 
   async remove(id: number, institutionId?: number) {
-    const current = await this.getOrFail(id, institutionId);
+    const ie = this.requireInstitutionId(institutionId);
+    const current = await this.getOrFail(id, ie);
     await this.eventsRepo.remove(current);
     return { deleted: true, id };
   }
 
-  private async getOrFail(id: number, institutionId?: number): Promise<Evento> {
+  private requireInstitutionId(institutionId?: number): number {
+    if (institutionId == null || institutionId < 1) {
+      throw new BadRequestException(
+        'Seleccione una institución educativa para gestionar eventos.',
+      );
+    }
+    return institutionId;
+  }
+
+  private async getOrFail(id: number, institutionId: number): Promise<Evento> {
     const event = await this.eventsRepo.findOneBy({ id });
-    if (!event || (institutionId !== undefined && event.institutionId !== institutionId)) {
+    if (!event) {
       throw new NotFoundException(`Evento ${id} no encontrado`);
+    }
+    if (event.institutionId != null && event.institutionId !== institutionId) {
+      throw new NotFoundException(
+        `Evento ${id} no pertenece a la institución seleccionada`,
+      );
     }
     return event;
   }
@@ -215,12 +258,7 @@ export class EventsService {
 
   private async syncEstadosLegacy(): Promise<void> {
     const rows = await this.eventsRepo.find();
-    const pending = rows.filter((row) => {
-      const expected = row.cancelado
-        ? 'cancelado'
-        : computeEstadoFromDates(row.fechaInicio, row.fechaFin);
-      return !row.estado || (row.estado === 'programado' && expected !== 'programado');
-    });
+    const pending = rows.filter((row) => !row.estado);
     if (!pending.length) return;
 
     await this.eventsRepo.save(
@@ -229,13 +267,18 @@ export class EventsService {
         estado: row.cancelado
           ? 'cancelado'
           : computeEstadoFromDates(row.fechaInicio, row.fechaFin),
+        cancelado: row.cancelado ?? canceladoFromEstado(
+          computeEstadoFromDates(row.fechaInicio, row.fechaFin),
+        ),
       })),
     );
   }
 }
 
-function formatDate(value: string): string {
-  const [y, m, d] = value.split('-');
+function formatDate(value: string | Date): string {
+  const ymd = toEventDateYmd(value);
+  if (!ymd) return '—';
+  const [y, m, d] = ymd.split('-');
   return `${d}/${m}/${y}`;
 }
 

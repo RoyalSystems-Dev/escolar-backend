@@ -45,6 +45,25 @@ describe('Student documents upload (e2e)', () => {
       .expect(401);
   });
 
+  it('POST sync-requisitos sin datos no se procesa', async () => {
+    const token = await login('admin');
+    const vacios = [
+      {},
+      { requisitos: [] },
+      { requisitos: [{ tipo: '   ', obligatorio: true }] },
+      { requisitos: [{ tipo: 'DNI del alumno', obligatorio: true, estado: 'pendiente' }] },
+    ];
+    for (const body of vacios) {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/students/1/documents/sync-requisitos')
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+        .expect(400);
+      const message = JSON.stringify(res.body.message);
+      expect(message).toContain('No se procesa por falta de datos de requisitos de matrícula.');
+    }
+  });
+
   it('POST upload rechaza usuario sin permiso de carga', async () => {
     const token = await login('p.vargas');
     const buffer = Buffer.from('%PDF-1.4 test');
@@ -70,6 +89,9 @@ describe('Student documents upload (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/students/${studentId}/documents/sync-requisitos`)
       .set('Authorization', `Bearer ${token}`)
+      .send({
+        requisitos: [{ tipo: 'Ficha de Matrícula (FUT)', obligatorio: true, numero: 'FUT-E2E' }],
+      })
       .expect((r) => expect([200, 201]).toContain(r.status));
 
     const docsRes = await request(app.getHttpServer())

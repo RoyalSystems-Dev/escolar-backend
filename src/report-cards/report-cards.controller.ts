@@ -30,6 +30,7 @@ export class ReportCardsController {
     @Query('bimestre') bimestre: string,
     @Query('anio') anio?: string,
     @Query('estado') estado?: string,
+    @Query('busqueda') busqueda?: string,
   ) {
     return this.reportCardsService.list({
       nivel,
@@ -38,6 +39,7 @@ export class ReportCardsController {
       bimestre: +bimestre,
       anio: anio ? +anio : undefined,
       estado: (estado as 'todos') || 'todos',
+      busqueda: busqueda?.trim() || undefined,
     });
   }
 

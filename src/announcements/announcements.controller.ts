@@ -39,6 +39,7 @@ export class AnnouncementsController {
   }
 
   @Delete(':id')
+  @RequirePermiso('comunicados.enviar')
   remove(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.announcementsService.remove(+id, institutionIdDeAlcance(req.user, req));
   }

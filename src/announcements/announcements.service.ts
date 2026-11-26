@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
@@ -13,16 +13,18 @@ export class AnnouncementsService {
   ) {}
 
   create(createAnnouncementDto: CreateAnnouncementDto, institutionId?: number) {
+    const ie = this.requireInstitutionId(institutionId);
     const entity = this.announcementsRepository.create({
       ...createAnnouncementDto,
-      institutionId: institutionId ?? null,
+      institutionId: ie,
     });
     return this.announcementsRepository.save(entity);
   }
 
   findAll(institutionId?: number) {
+    const ie = this.requireInstitutionId(institutionId);
     return this.announcementsRepository.find({
-      where: institutionId === undefined ? {} : { institutionId },
+      where: { institutionId: ie },
       order: { fechaPublicacion: 'DESC' },
     });
   }
@@ -43,10 +45,25 @@ export class AnnouncementsService {
     return { deleted: true, id };
   }
 
+  private requireInstitutionId(institutionId?: number): number {
+    if (institutionId == null || institutionId < 1) {
+      throw new BadRequestException(
+        'Seleccione una institución educativa para gestionar comunicados.',
+      );
+    }
+    return institutionId;
+  }
+
   private async getOrFail(id: number, institutionId?: number): Promise<Announcement> {
+    const ie = this.requireInstitutionId(institutionId);
     const announcement = await this.announcementsRepository.findOneBy({ id });
-    if (!announcement || (institutionId !== undefined && announcement.institutionId !== institutionId)) {
-      throw new NotFoundException(`Announcement ${id} no encontrado`);
+    if (!announcement) {
+      throw new NotFoundException(`Comunicado ${id} no encontrado`);
+    }
+    if (announcement.institutionId !== ie) {
+      throw new NotFoundException(
+        `Comunicado ${id} no pertenece a la institución seleccionada`,
+      );
     }
     return announcement;
   }

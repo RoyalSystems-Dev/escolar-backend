@@ -39,6 +39,11 @@ export class ReportCardQueryDto {
   @IsString()
   @MaxLength(20)
   estado?: ReportCardEstado | 'todos';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  busqueda?: string;
 }
 
 export class GenerateReportCardsDto extends ReportCardQueryDto {

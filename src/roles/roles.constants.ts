@@ -216,7 +216,8 @@ export const ROLE_DEFINITIONS = [
       'estudiantes.documentos',
       'evaluacion.ver', 'evaluacion.reportes',
       'horarios.ver',
-      'asistencia.ver', 'asistencia.reportes', 'comunicados.ver', 'comunicados.enviar',
+      'asistencia.ver', 'asistencia.registrar', 'asistencia.editar', 'asistencia.reportes',
+      'comunicados.ver', 'comunicados.enviar',
     ],
   },
   {

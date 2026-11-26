@@ -145,6 +145,54 @@ export class SalonesService {
     return rows.map((r) => this.toSalonResponse(r));
   }
 
+  async exportVacanciesCsv(
+    query?: {
+      anioEscolar?: number;
+      nivel?: string;
+      grado?: string;
+    },
+    req?: MaestrosAuthRequest,
+  ): Promise<string> {
+    const rows = await this.findVacancies(query, req);
+    const header = [
+      'Anio escolar',
+      'Nivel',
+      'Grado',
+      'Seccion',
+      'Aforo',
+      'Matriculados',
+      'Disponibles',
+      'Estado',
+      'Ingresante',
+    ]
+      .map((c) => this.csvCell(c))
+      .join(',');
+    const body = rows.map((r) =>
+      [
+        r.anioEscolar,
+        r.nivel,
+        r.grado,
+        r.seccion,
+        r.aforo,
+        r.matriculados,
+        r.disponibles,
+        r.estado,
+        r.esIngresante ? 'Si' : 'No',
+      ]
+        .map((c) => this.csvCell(c))
+        .join(','),
+    );
+    return [header, ...body].join('\r\n');
+  }
+
+  private csvCell(value: string | number | boolean | null | undefined): string {
+    const raw = value == null ? '' : String(value);
+    if (/[",\r\n]/.test(raw)) {
+      return `"${raw.replace(/"/g, '""')}"`;
+    }
+    return raw;
+  }
+
   async findVacancies(
     query?: {
       anioEscolar?: number;
@@ -300,7 +348,17 @@ export class SalonesService {
     const institutionId = requireMaestrosInstitutionId(req);
     const salon = await this.getOrFail(id);
     assertMaestroBelongsToInstitution(salon, institutionId);
-    if (dto.aforo !== undefined) salon.aforo = dto.aforo;
+    if (dto.aforo !== undefined) {
+      const key = this.sectionKey(salon.nivel, salon.grado, salon.seccion);
+      const studentCounts = await this.countStudentsBySection(institutionId);
+      const matriculados = studentCounts.get(key) ?? 0;
+      if (dto.aforo < matriculados) {
+        throw new BadRequestException(
+          `El aforo (${dto.aforo}) no puede ser menor que las plazas ocupadas (${matriculados}).`,
+        );
+      }
+      salon.aforo = dto.aforo;
+    }
     if (dto.activo !== undefined) salon.activo = dto.activo;
     const saved = await this.salonRepo.save(salon);
     this.catalogCache.invalidate('salones:');

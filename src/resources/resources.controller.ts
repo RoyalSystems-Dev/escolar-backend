@@ -8,10 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { createReadStream } from 'fs';
 import {
   CreateResourceDto,
   UpdateResourceDto,
@@ -67,6 +69,16 @@ export class ResourcesController {
       nivel,
       seccion,
       visible: visible === 'true' ? true : visible === 'false' ? false : undefined,
+    });
+  }
+
+  @Get(':id/file')
+  async download(@Param('id') id: string): Promise<StreamableFile> {
+    const file = await this.resourcesService.resolveDownload(+id);
+    const ascii = file.name.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
+    return new StreamableFile(createReadStream(file.abs), {
+      type: file.mime,
+      disposition: `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
     });
   }
 

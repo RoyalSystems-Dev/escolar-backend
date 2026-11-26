@@ -20,6 +20,7 @@ import {
   gradoSig,
   seccionPropuesta,
   situacionFromPromedio,
+  situacionRequierePromocion,
   toCandidateResponse,
   toRecordResponse,
   ContinuityRecordResponse,
@@ -56,20 +57,29 @@ export class ContinuityEnrollmentService {
     });
     const generatedIds = new Set(existing.map((r) => r.studentId));
 
-    const promedios = await this.computePromediosForStudents(
+    const notaMinima = this.gradingConfigService.getConfig().notaMinima;
+    const statsMap = await this.computePromedioStatsForStudents(
       students.map((s) => s.id),
+      notaMinima,
     );
 
-    const notaMinima = this.gradingConfigService.getConfig().notaMinima;
-
     const candidates = students.map((student) => {
-      const promedio = promedios.get(student.id) ?? 0;
-      const situacion = situacionFromPromedio(promedio, notaMinima);
+      const stats = statsMap.get(student.id) ?? {
+        promedio: 0,
+        tieneNotasAprobatorias: false,
+        aptoPromocion: false,
+      };
+      const situacion = situacionFromPromedio(
+        stats.promedio,
+        notaMinima,
+        stats.aptoPromocion,
+      );
       return toCandidateResponse(
         student,
-        promedio,
+        stats.promedio,
         situacion,
         generatedIds.has(student.id),
+        stats,
       );
     });
 
@@ -132,7 +142,11 @@ export class ContinuityEnrollmentService {
     });
     const alreadyGenerated = new Set(existing.map((r) => r.studentId));
 
-    const promedios = await this.computePromediosForStudents(studentIds);
+    const notaMinima = this.gradingConfigService.getConfig().notaMinima;
+    const statsMap = await this.computePromedioStatsForStudents(
+      studentIds,
+      notaMinima,
+    );
     const generadoPor = dto.generadoPor?.trim() || 'Administrador';
     const created: ContinuityEnrollment[] = [];
     const skipped: number[] = [];
@@ -150,13 +164,22 @@ export class ContinuityEnrollmentService {
         );
       }
 
-      const promedio = promedios.get(student.id) ?? 0;
+      const stats = statsMap.get(student.id) ?? {
+        promedio: 0,
+        tieneNotasAprobatorias: false,
+        aptoPromocion: false,
+      };
       const situacion =
         item.situacion ??
-        situacionFromPromedio(
-          promedio,
-          this.gradingConfigService.getConfig().notaMinima,
+        situacionFromPromedio(stats.promedio, notaMinima, stats.aptoPromocion);
+
+      if (situacionRequierePromocion(situacion) && !stats.aptoPromocion) {
+        throw new BadRequestException(
+          `El estudiante ${student.codigo} no puede registrarse como ${situacion}: promedio 0, sin notas aprobatorias o inferior a la nota mínima (${notaMinima}).`,
         );
+      }
+
+      const promedio = stats.promedio;
       const gradoAnterior = gradoLabelFromStudent(student);
       const gradoNuevo = gradoSig(gradoAnterior, situacion);
       const seccionNueva =
@@ -307,10 +330,27 @@ export class ContinuityEnrollmentService {
     await this.studentRepo.save(student);
   }
 
-  private async computePromediosForStudents(
+  private async computePromedioStatsForStudents(
     studentIds: number[],
-  ): Promise<Map<number, number>> {
-    const map = new Map<number, number>();
+    notaMinima: number,
+  ): Promise<
+    Map<
+      number,
+      {
+        promedio: number;
+        tieneNotasAprobatorias: boolean;
+        aptoPromocion: boolean;
+      }
+    >
+  > {
+    const map = new Map<
+      number,
+      {
+        promedio: number;
+        tieneNotasAprobatorias: boolean;
+        aptoPromocion: boolean;
+      }
+    >();
     if (!studentIds.length) return map;
 
     const grades = await this.gradeRepo.find({
@@ -329,14 +369,21 @@ export class ContinuityEnrollmentService {
       const finals = list.filter((g) => g.tipo === 'final');
       const source = finals.length ? finals : list;
       if (!source.length) {
-        map.set(id, 0);
+        map.set(id, {
+          promedio: 0,
+          tieneNotasAprobatorias: false,
+          aptoPromocion: false,
+        });
         continue;
       }
-      const avg =
+      const tieneNotasAprobatorias = source.some((g) => g.nota >= notaMinima);
+      const promedio =
         Math.round(
           (source.reduce((s, g) => s + g.nota, 0) / source.length) * 10,
         ) / 10;
-      map.set(id, avg);
+      const aptoPromocion =
+        promedio > 0 && promedio >= notaMinima && tieneNotasAprobatorias;
+      map.set(id, { promedio, tieneNotasAprobatorias, aptoPromocion });
     }
 
     return map;

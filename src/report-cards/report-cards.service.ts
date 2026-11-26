@@ -24,6 +24,7 @@ import {
   InstitucionPdfInfo,
   ReportCardsPdfService,
 } from './report-cards-pdf.service';
+import { matchesBusqueda as matchSearch } from '../evaluation-reports/evaluation-reports.util';
 
 export interface LibretaFirmaDto {
   nombre: string;
@@ -125,6 +126,7 @@ export class ReportCardsService {
     bimestre: number;
     anio?: number;
     estado?: ReportCardEstado | 'todos';
+    busqueda?: string;
   }): Promise<LibretaListResponse> {
     const institutionId = await this.resolveInstitutionIdForSection(
       query.nivel,
@@ -194,6 +196,17 @@ export class ReportCardsService {
       libretas = libretas.filter((l) => l.estado === query.estado);
     }
 
+    const resumen = {
+      total: libretas.length,
+      pendiente: libretas.filter((l) => l.estado === 'pendiente').length,
+      generada: libretas.filter((l) => l.estado === 'generada').length,
+      firmada: libretas.filter((l) => l.estado === 'firmada').length,
+    };
+
+    if (query.busqueda?.trim()) {
+      libretas = libretas.filter((l) => matchSearch(query.busqueda, l.alumno));
+    }
+
     return {
       institucion: inst,
       bimestre: bimestreActivo,
@@ -203,12 +216,7 @@ export class ReportCardsService {
       grado: query.grado,
       seccion: query.seccion,
       anio: anioLectivo,
-      resumen: {
-        total: libretas.length,
-        pendiente: libretas.filter((l) => l.estado === 'pendiente').length,
-        generada: libretas.filter((l) => l.estado === 'generada').length,
-        firmada: libretas.filter((l) => l.estado === 'firmada').length,
-      },
+      resumen,
       libretas,
     };
   }

@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { InstitutionController } from './institution.controller';
 import { InstitutionService } from './institution.service';
 import { GradingModule } from '../grading/grading.module';
@@ -29,6 +30,7 @@ import { TransferRequest } from '../transfers/entities/transfer-request.entity';
     ]),
     forwardRef(() => GradingModule),
     forwardRef(() => MaestrosModule),
+    AuditLogsModule,
   ],
   controllers: [InstitutionController, InstitutionDirectoryController],
   providers: [InstitutionService, InstitutionDirectoryService],

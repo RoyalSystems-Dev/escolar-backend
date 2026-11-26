@@ -19,6 +19,7 @@ import {
   UpdateDocumentoDto,
   UpsertDocumentoDto,
 } from './dto/expediente.dto';
+import { SyncRequisitosMatriculaDto } from './dto/sync-requisitos.dto';
 import { UploadStudentDocumentDto } from './dto/student-document-upload.dto';
 import { StudentDocumentsService } from './student-documents.service';
 import {
@@ -87,8 +88,14 @@ export class StudentDocumentsController {
     'estudiantes.editar',
     'matricula.editar',
   )
-  syncRequisitos(@Param('id') id: string) {
-    return this.studentDocumentsService.syncRequisitosMatricula(+id);
+  syncRequisitos(
+    @Param('id') id: string,
+    @Body() dto: SyncRequisitosMatriculaDto,
+  ) {
+    return this.studentDocumentsService.syncRequisitosMatricula(
+      +id,
+      dto.requisitos,
+    );
   }
 
   @Post(':id/documents')

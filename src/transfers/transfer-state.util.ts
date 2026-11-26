@@ -34,6 +34,14 @@ export function hoyLima(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date());
 }
 
+/** Año usable en códigos de traslado. Un año institucional fuera del calendario (p. ej. 2064) no se imprime. */
+export function anioEscolarOperativo(anioInstitucion: unknown): number {
+  const calendario = Number(hoyLima().slice(0, 4));
+  const anio = Number(anioInstitucion);
+  if (Number.isInteger(anio) && anio >= calendario - 1 && anio <= calendario + 1) return anio;
+  return calendario;
+}
+
 export function codigoTraslado(anio: number, id: number): string {
   return `TR-${anio}-${String(id).padStart(4, '0')}`;
 }

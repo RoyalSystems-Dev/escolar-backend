@@ -31,6 +31,8 @@ import { normalizeGradoMatricula } from '../maestros/salones/salones.util';
 import {
   CreateCurriculumAreaDto,
   CreateCurriculumDto,
+  CreateCurriculumCapacidadDto,
+  CreateCurriculumCompetenciaDto,
   CreateCurriculumSubjectDto,
   CreateTeacherAssignmentDto,
   UpdateCurriculumAreaDto,
@@ -45,6 +47,11 @@ import {
   MineduAreaKey,
   resolveMineduKey,
 } from './minedu-competencias.data';
+import {
+  curriculaSolapan,
+  mensajeCurriculaDuplicada,
+  normalizarSeccionCurricula,
+} from './curricula-unicidad.util';
 import { resetCurriculaIdSequences } from './curricula-table-rename';
 import {
   assertCurriculaEditable,
@@ -327,6 +334,11 @@ export class CurriculaService implements OnModuleInit {
         });
       }),
     );
+
+    const curr = await this.curriculumRepo.findOneBy({ id: curriculumId });
+    if (curr) {
+      await this.vincularAsignacionesSinDocente([curriculumId], curr.institutionId);
+    }
   }
 
   private async syncMineduCompetencias(): Promise<void> {
@@ -722,25 +734,15 @@ export class CurriculaService implements OnModuleInit {
       ? requireCurriculaInstitutionId(ctx.req)
       : await resolveSeedInstitutionId(this.institutionRepo);
 
-    const existing = await this.curriculumRepo.findOne({
-      where: {
-        anio: dto.anio,
-        nivel: dto.nivel,
-        version: '1.0',
-        institutionId,
-      },
-    });
-    if (existing && existing.estado !== 'inactivo') {
-      throw new BadRequestException(
-        `Ya existe una currícula para ${dto.nivel} ${dto.anio} en esta institución.`,
-      );
-    }
+    const seccion = normalizarSeccionCurricula(dto.seccion);
+    await this.assertCurriculaDisponible(institutionId, dto.anio, dto.nivel, seccion);
 
     const created = await this.curriculumRepo.save(
       this.curriculumRepo.create({
         institutionId,
         anio: dto.anio,
         nivel: dto.nivel,
+        seccion,
         estado: 'borrador',
         version: '1.0',
         tipoEscala: dto.tipoEscala ?? 'numerica',
@@ -770,15 +772,32 @@ export class CurriculaService implements OnModuleInit {
       throw new BadRequestException('No se puede editar una currícula inactiva');
     }
 
+    if (dto.seccion !== undefined) {
+      await this.assertCurriculaDisponible(
+        curr.institutionId,
+        curr.anio,
+        curr.nivel,
+        dto.seccion,
+        curr.id,
+      );
+      dto.seccion = normalizarSeccionCurricula(dto.seccion);
+    }
+
     if (dto.estado === 'activo') {
-      await this.curriculumRepo.update(
-        {
+      const sec = dto.seccion !== undefined ? dto.seccion : normalizarSeccionCurricula(curr.seccion);
+      const activas = await this.curriculumRepo.find({
+        where: {
           nivel: curr.nivel,
           estado: 'activo' as const,
           institutionId: curr.institutionId,
         },
-        { estado: 'inactivo' },
-      );
+      });
+      const ids = activas
+        .filter((otra) => otra.id !== curr.id && curriculaSolapan(sec, otra.seccion))
+        .map((otra) => otra.id);
+      if (ids.length) {
+        await this.curriculumRepo.update({ id: In(ids) }, { estado: 'inactivo' });
+      }
     }
 
     Object.assign(curr, dto);
@@ -809,12 +828,25 @@ export class CurriculaService implements OnModuleInit {
     };
   }
 
-  async copyCurriculum(id: number, ctx?: CurriculaActorContext): Promise<Curriculum> {
+  async copyCurriculum(
+    id: number,
+    ctx?: CurriculaActorContext,
+    anioDestino?: number,
+    seccionDestino?: string,
+  ): Promise<Curriculum> {
     const orig = await this.getCurriculumOrFail(id, ctx?.institutionId);
+    const anio =
+      anioDestino != null && Number.isFinite(anioDestino) ? anioDestino : orig.anio;
+    const seccion =
+      seccionDestino !== undefined
+        ? normalizarSeccionCurricula(seccionDestino)
+        : normalizarSeccionCurricula(orig.seccion);
+    await this.assertCurriculaDisponible(orig.institutionId, anio, orig.nivel, seccion);
     const copy = await this.curriculumRepo.save(
       this.curriculumRepo.create({
-        anio: orig.anio,
+        anio,
         nivel: orig.nivel,
+        seccion,
         estado: 'borrador',
         version: '1.0',
         tipoEscala: orig.tipoEscala,
@@ -826,6 +858,26 @@ export class CurriculaService implements OnModuleInit {
 
     await this.cloneCurriculumStructure(id, copy.id);
     return copy;
+  }
+
+  private async assertCurriculaDisponible(
+    institutionId: number,
+    anio: number,
+    nivel: string,
+    seccion: string,
+    excludeId?: number,
+  ): Promise<void> {
+    const sec = normalizarSeccionCurricula(seccion);
+    const existentes = await this.curriculumRepo.find({
+      where: { institutionId, anio, nivel },
+    });
+    const conflicto = existentes.find(
+      (row) => row.id !== excludeId && curriculaSolapan(sec, row.seccion),
+    );
+    if (!conflicto) return;
+    throw new BadRequestException(
+      mensajeCurriculaDuplicada(nivel, anio, sec, conflicto.seccion),
+    );
   }
 
   private async cloneCurriculumStructure(
@@ -1157,6 +1209,98 @@ export class CurriculaService implements OnModuleInit {
     return this.subjectRepo.find({ where, order: { nombre: 'ASC' } });
   }
 
+  async createCompetencia(
+    dto: CreateCurriculumCompetenciaDto,
+    ctx?: CurriculaActorContext,
+  ): Promise<CurriculumCompetencia> {
+    const subject = await this.getSubjectOrFail(dto.cursoId);
+    if (subject.curriculumId == null) {
+      throw new BadRequestException('El curso no está vinculado a una currícula.');
+    }
+    const curr = await this.getCurriculumOrFail(
+      subject.curriculumId,
+      ctx?.institutionId,
+    );
+    assertCurriculaEditable(curr.estado);
+    const nombre = dto.nombre?.trim().replace(/\s+/g, ' ');
+    if (!nombre || nombre.length < 2) {
+      throw new BadRequestException(
+        'El nombre de la competencia debe tener al menos 2 caracteres.',
+      );
+    }
+    if (nombre.length > 300) {
+      throw new BadRequestException(
+        'El nombre de la competencia no puede superar 300 caracteres.',
+      );
+    }
+    const dup = await this.competenciaRepo.findOne({
+      where: { cursoId: dto.cursoId, nombre, activo: true },
+    });
+    if (dup) {
+      throw new BadRequestException(
+        `Ya existe una competencia activa con el nombre «${nombre}» en este curso.`,
+      );
+    }
+    return this.competenciaRepo.save(
+      this.competenciaRepo.create({
+        cursoId: dto.cursoId,
+        nombre,
+        activo: true,
+      }),
+    );
+  }
+
+  async createCapacidad(
+    dto: CreateCurriculumCapacidadDto,
+    ctx?: CurriculaActorContext,
+  ): Promise<CurriculumCapacidad> {
+    const comp = await this.competenciaRepo.findOneBy({ id: dto.competenciaId });
+    if (!comp) {
+      throw new NotFoundException(`Competencia ${dto.competenciaId} no encontrada`);
+    }
+    const subject = await this.getSubjectOrFail(comp.cursoId);
+    if (subject.curriculumId == null) {
+      throw new BadRequestException('El curso no está vinculado a una currícula.');
+    }
+    const curr = await this.getCurriculumOrFail(
+      subject.curriculumId,
+      ctx?.institutionId,
+    );
+    assertCurriculaEditable(curr.estado);
+    const nombre = dto.nombre?.trim().replace(/\s+/g, ' ');
+    if (!nombre || nombre.length < 2) {
+      throw new BadRequestException(
+        'El nombre de la capacidad debe tener al menos 2 caracteres.',
+      );
+    }
+    if (nombre.length > 300) {
+      throw new BadRequestException(
+        'El nombre de la capacidad no puede superar 300 caracteres.',
+      );
+    }
+
+    let orden = dto.orden;
+    if (orden == null) {
+      const row = await this.capacidadRepo
+        .createQueryBuilder('c')
+        .select('MAX(c.orden)', 'max')
+        .where('c.competenciaId = :competenciaId', {
+          competenciaId: dto.competenciaId,
+        })
+        .getRawOne<{ max: string | null }>();
+      orden = (row?.max ? Number(row.max) : 0) + 1;
+    }
+
+    return this.capacidadRepo.save(
+      this.capacidadRepo.create({
+        competenciaId: dto.competenciaId,
+        nombre,
+        orden,
+        activo: true,
+      }),
+    );
+  }
+
   async createSubject(dto: CreateCurriculumSubjectDto): Promise<CurriculumSubject> {
     const curr = await this.getCurriculumOrFail(dto.curriculumId);
     const area = await this.getAreaOrFail(dto.areaId);
@@ -1257,6 +1401,14 @@ export class CurriculaService implements OnModuleInit {
       await this.ensureCurriculumSubjectsFromMaestro(curr.id, curr.nivel);
     }
     await this.ensureMaestroCursoLinks();
+    const curriculasIe = await this.curriculumRepo.find({
+      where: institutionId != null ? { institutionId } : { id: In(curriculumIds) },
+      select: { id: true },
+    });
+    await this.vincularAsignacionesSinDocente(
+      [...new Set([...curriculumIds, ...curriculasIe.map((c) => c.id)])],
+      institutionId,
+    );
 
     const [asignaciones, salones, cursosEnriched] = await Promise.all([
       this.assignmentRepo.find({
@@ -1458,6 +1610,7 @@ export class CurriculaService implements OnModuleInit {
 
     const docente = await this.getDocenteOrFail(dto.docenteId);
     this.assertDocenteEnInstitucion(docente, institutionId, curriculum.institutionId);
+    this.assertDocenteConDniYEspecialidad(docente);
     const seccionesNorm = dto.secciones.map((s) => s.trim().toUpperCase());
 
     const existingSameDocente = await this.findActiveAssignmentForDocente(
@@ -1551,6 +1704,7 @@ export class CurriculaService implements OnModuleInit {
     if (dto.docenteId != null) {
       const docente = await this.getDocenteOrFail(dto.docenteId);
       this.assertDocenteEnInstitucion(docente, institutionId, curriculum.institutionId);
+      this.assertDocenteConDniYEspecialidad(docente);
       current.docenteId = docente.id;
       current.docenteNombre = `${docente.nombres} ${docente.apellidos}`.trim();
     }
@@ -1595,6 +1749,115 @@ export class CurriculaService implements OnModuleInit {
     return { ok: true };
   }
 
+  /** Las asignaciones de semilla solo traían el nombre. Sin docenteId la pantalla no puede mostrar DNI ni especialidad. */
+  private async vincularAsignacionesSinDocente(
+    curriculumIds: number[],
+    institutionId?: number,
+  ): Promise<void> {
+    if (!curriculumIds.length) return;
+    const huerfanas = await this.assignmentRepo.find({
+      where: curriculumIds.map((curriculumId) => ({
+        curriculumId,
+        docenteId: IsNull(),
+      })),
+    });
+    if (!huerfanas.length) return;
+
+    const curriculas = await this.curriculumRepo.find({
+      where: { id: In(curriculumIds) },
+    });
+    const institucionPorCurricula = new Map(
+      curriculas.map((c) => [c.id, c.institutionId]),
+    );
+    const instituciones = [
+      ...new Set(
+        curriculas
+          .map((c) => c.institutionId)
+          .filter((id): id is number => id != null)
+          .filter((id) => institutionId == null || id === institutionId),
+      ),
+    ];
+    if (!instituciones.length) return;
+
+    const docentes = await this.docenteRepo
+      .createQueryBuilder('d')
+      .where(`btrim(d.dni) <> ''`)
+      .andWhere(`btrim(d.especialidad) <> ''`)
+      .andWhere(`d.estado = 'activo'`)
+      .andWhere('d.institutionId IN (:...instituciones)', { instituciones })
+      .orderBy('d.apellidos', 'ASC')
+      .addOrderBy('d.nombres', 'ASC')
+      .getMany();
+    if (!docentes.length) return;
+
+    const cursos = await this.subjectRepo.find({
+      where: { id: In(huerfanas.map((a) => a.cursoId)) },
+    });
+    const cursoPorId = new Map(cursos.map((c) => [c.id, c]));
+    const turnoPorInstitucion = new Map<number, number>();
+
+    for (const asg of huerfanas) {
+      const ie = asg.curriculumId != null ? institucionPorCurricula.get(asg.curriculumId) : undefined;
+      if (ie == null || (institutionId != null && ie !== institutionId)) continue;
+      const deLaIe = docentes.filter((d) => d.institutionId === ie);
+      if (!deLaIe.length) continue;
+
+      const curso = asg.cursoId != null ? cursoPorId.get(asg.cursoId) : undefined;
+      const nombre = this.foldTexto(asg.docenteNombre);
+      const porNombre = deLaIe.find(
+        (d) => this.foldTexto(`${d.nombres} ${d.apellidos}`) === nombre,
+      );
+      const afines = curso
+        ? deLaIe.filter((d) => this.especialidadAfinaConCurso(d.especialidad, curso.nombre))
+        : [];
+      const pool = porNombre ? [porNombre] : afines.length ? afines : deLaIe;
+      const turno = turnoPorInstitucion.get(ie) ?? 0;
+      const docente = porNombre ?? pool[turno % pool.length];
+      if (!porNombre) turnoPorInstitucion.set(ie, turno + 1);
+      asg.docenteId = docente.id;
+      asg.docenteNombre = `${docente.nombres} ${docente.apellidos}`.trim();
+      await this.assignmentRepo.save(asg);
+    }
+  }
+
+  private foldTexto(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private especialidadAfinaConCurso(especialidad: string, cursoNombre: string): boolean {
+    const e = this.foldTexto(especialidad);
+    const c = this.foldTexto(cursoNombre);
+    const claves = [
+      'matematic',
+      'comunicacion',
+      'historia',
+      'ingles',
+      'arte',
+      'fisica',
+      'ciencia',
+      'religion',
+      'musica',
+      'tecnolog',
+      'biolog',
+      'quimic',
+      'geograf',
+      'algebra',
+      'geometr',
+      'trigonometr',
+      'aritmet',
+    ];
+    if (claves.some((k) => c.includes(k) && e.includes(k))) return true;
+    return (
+      (c.includes('comprension') || c.includes('produccion') || c.includes('texto')) &&
+      e.includes('comunicacion')
+    );
+  }
+
   private async loadDocentesForAsignacion(
     institutionId?: number,
   ): Promise<AsignacionDocenteItem[]> {
@@ -1605,6 +1868,14 @@ export class CurriculaService implements OnModuleInit {
     applyInstitutionIdWhere(qb, 'd', institutionId);
     const docentes = await qb.getMany();
     return docentes.map((d) => this.mapDocenteToItem(d));
+  }
+
+  private assertDocenteConDniYEspecialidad(docente: Docente): void {
+    if (!docente.dni?.trim() || !docente.especialidad?.trim()) {
+      throw new BadRequestException(
+        'El docente debe tener DNI y especialidad para poder asignarlo',
+      );
+    }
   }
 
   private assertDocenteEnInstitucion(

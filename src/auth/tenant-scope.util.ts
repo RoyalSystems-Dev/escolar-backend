@@ -69,7 +69,9 @@ export function institutionIdDeAlcance(
     return undefined;
   }
   if (!user) return undefined;
-  return user.institutionId ?? -1;
+  const assigned = user.institutionId;
+  if (assigned != null && assigned > 0) return assigned;
+  return undefined;
 }
 
 export function parseInstitutionId(

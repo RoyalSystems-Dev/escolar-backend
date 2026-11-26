@@ -141,6 +141,12 @@ export class DocentesMaestrosController {
     return this.docentesService.update(id, dto, req as MaestrosAuthRequest);
   }
 
+  @Patch(':id/activar')
+  @RequirePermiso('docentes.editar')
+  activar(@Param('id', ParseIntPipe) id: number, @Req() req: AuthRequest) {
+    return this.docentesService.activar(id, req as MaestrosAuthRequest);
+  }
+
   @Delete(':id')
   @RequirePermiso('docentes.editar')
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: AuthRequest) {

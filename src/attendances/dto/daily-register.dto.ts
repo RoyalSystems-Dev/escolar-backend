@@ -9,6 +9,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsDiaLectivo } from './dia-lectivo.validator';
 
 export class DailyRegisterEntryDto {
   @IsInt()
@@ -33,6 +34,7 @@ export class SaveDailyRegisterDto {
   seccion: string;
 
   @IsDateString()
+  @IsDiaLectivo()
   fecha: string;
 
   @IsArray()

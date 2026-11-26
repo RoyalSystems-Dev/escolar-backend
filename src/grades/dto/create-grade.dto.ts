@@ -30,9 +30,9 @@ export class CreateGradeDto {
   @Max(4)
   bimestre: number;
 
-  @IsNumber()
-  @Min(0)
-  @Max(20)
+  @IsNumber({}, { message: 'No se aceptan notas fuera de 0 a 20.' })
+  @Min(0, { message: 'No se aceptan notas fuera de 0 a 20.' })
+  @Max(20, { message: 'No se aceptan notas fuera de 0 a 20.' })
   nota: number;
 
   @IsDateString()

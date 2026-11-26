@@ -3,6 +3,59 @@ export interface DocumentoRequerido {
   obligatorio: boolean;
 }
 
+/** Respuesta cuando el alta de requisitos llega vacía. */
+export const MENSAJE_REQUISITOS_SIN_DATOS =
+  'No se procesa por falta de datos de requisitos de matrícula.';
+
+export interface RequisitoConDato extends DocumentoRequerido {
+  numero: string;
+  estado: 'pendiente' | 'entregado' | 'vencido';
+  fechaEntrega: string;
+  imagenUrl: string;
+  tieneArchivo: boolean;
+}
+
+/** Hay dato cuando el requisito trae número, archivo o un estado distinto de pendiente. La fecha sola no cuenta. */
+export function requisitosConDatos(
+  requisitos?: Array<{
+    tipo?: string | null;
+    obligatorio?: boolean;
+    numero?: string | null;
+    estado?: string | null;
+    fechaEntrega?: string | null;
+    imagenUrl?: string | null;
+    tieneArchivo?: boolean | null;
+  }> | null,
+): RequisitoConDato[] {
+  const utiles: RequisitoConDato[] = [];
+  for (const req of requisitos ?? []) {
+    const tipo = (req?.tipo ?? '').trim();
+    const numero = (req?.numero ?? '').trim();
+    const fechaEntrega = (req?.fechaEntrega ?? '').trim();
+    const imagenUrl = (req?.imagenUrl ?? '').trim();
+    const estadoRaw = (req?.estado ?? '').trim();
+    const estado =
+      estadoRaw === 'entregado' || estadoRaw === 'vencido' ? estadoRaw : 'pendiente';
+    const tieneArchivo = !!req?.tieneArchivo;
+    const hayDato =
+      numero.length > 0 ||
+      imagenUrl.length > 0 ||
+      tieneArchivo ||
+      estado !== 'pendiente';
+    if (!tipo || !hayDato) continue;
+    utiles.push({
+      tipo,
+      obligatorio: !!req?.obligatorio,
+      numero,
+      estado,
+      fechaEntrega,
+      imagenUrl,
+      tieneArchivo,
+    });
+  }
+  return utiles;
+}
+
 /** Requisitos documentales por grado (misma fuente que nueva matrícula). */
 export const DOCUMENTOS_REQUISITOS: Record<string, DocumentoRequerido[]> = {
   '1° Inicial': [

@@ -351,7 +351,9 @@ FROM (
   CROSS JOIN fechas f
   WHERE s.activo = true
 ) q
-WHERE NOT EXISTS (
+WHERE EXTRACT(DOW FROM q.fecha) BETWEEN 1 AND 5
+  AND q.fecha <= CURRENT_DATE
+  AND NOT EXISTS (
   SELECT 1 FROM attendances att
   WHERE att."studentId" = q."studentId"
     AND att.fecha = q.fecha

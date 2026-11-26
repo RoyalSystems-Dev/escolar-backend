@@ -36,14 +36,17 @@ export class EventosMaestrosController {
     @Query('busqueda') busqueda?: string,
     @Req() req?: Request & { user?: RequestUser },
   ) {
-    return this.eventosService.findAll({
-      mes,
-      tipo,
-      destinatarios,
-      estado,
-      busqueda,
-      institutionId: institutionIdDeAlcance(req?.user, req),
-    });
+    return this.eventosService.findAll(
+      {
+        mes,
+        tipo,
+        destinatarios,
+        estado,
+        busqueda,
+        institutionId: institutionIdDeAlcance(req?.user, req),
+      },
+      req as MaestrosAuthRequest,
+    );
   }
 
   @Post()

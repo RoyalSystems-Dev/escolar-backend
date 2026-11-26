@@ -187,15 +187,15 @@ describe('AniosEscolaresService', () => {
 
   it('impide duplicar año escolar', async () => {
     anioRepo.findOne.mockImplementation(async (opts: { where: { anio?: number } }) => {
-      if (opts.where.anio === 2028) return { id: 9, anio: 2028 } as MaestroAnioEscolar;
+      if (opts.where.anio === 2027) return { id: 9, anio: 2027 } as MaestroAnioEscolar;
       return null;
     });
     await expect(
       service.create(
         {
-          anio: 2028,
-          fechaInicio: '2028-03-01',
-          fechaFin: '2028-12-20',
+          anio: 2027,
+          fechaInicio: '2027-03-01',
+          fechaFin: '2027-12-20',
           tipoPeriodo: 'bimestre',
         },
         actor,
@@ -208,15 +208,15 @@ describe('AniosEscolaresService', () => {
     anioRepo.find.mockResolvedValue([]);
     const result = await service.create(
       {
-        anio: 2029,
-        fechaInicio: '2029-03-01',
-        fechaFin: '2029-12-20',
+        anio: 2027,
+        fechaInicio: '2027-03-01',
+        fechaFin: '2027-12-20',
         tipoPeriodo: 'bimestre',
-        motivo: 'Planificación calendarización 2029',
+        motivo: 'Planificación calendarización 2027',
       },
       actor,
     );
-    expect(result.anio).toBe(2029);
+    expect(result.anio).toBe(2027);
     expect(result.estado).toBe('planificado');
   });
 

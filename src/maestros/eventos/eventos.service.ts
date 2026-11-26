@@ -17,6 +17,7 @@ import {
   canceladoFromEstado,
   computeEstadoFromDates,
   normalizeEventEstado,
+  toEventDateYmd,
 } from '../../events/event-estado.util';
 import { MAESTRO_EVENTOS_SEED } from './eventos-seed.data';
 import { Institution } from '../../institution/entities/institution.entity';
@@ -24,6 +25,7 @@ import {
   assertMaestroBelongsToInstitution,
   MaestrosAuthRequest,
   requireMaestrosInstitutionId,
+  resolveMaestrosInstitutionId,
   resolveSeedInstitutionId,
 } from '../common/maestros-tenant.util';
 
@@ -80,20 +82,31 @@ export class EventosMaestrosService {
     );
   }
 
-  async findAll(query?: {
-    mes?: string;
-    tipo?: string;
-    destinatarios?: string;
-    estado?: string;
-    busqueda?: string;
-    institutionId?: number;
-  }): Promise<MaestroEventoResponse[]> {
+  async findAll(
+    query?: {
+      mes?: string;
+      tipo?: string;
+      destinatarios?: string;
+      estado?: string;
+      busqueda?: string;
+      institutionId?: number;
+    },
+    req?: MaestrosAuthRequest,
+  ): Promise<MaestroEventoResponse[]> {
     await this.syncEstadosLegacy();
+    const institutionId =
+      query?.institutionId ??
+      (req ? resolveMaestrosInstitutionId(req) : undefined);
+    if (institutionId == null) {
+      return [];
+    }
 
     const qb = this.eventoRepo
       .createQueryBuilder('e')
       .orderBy('e.fechaInicio', 'ASC')
       .addOrderBy('e.horaInicio', 'ASC');
+
+    qb.andWhere('e.institutionId = :institutionId', { institutionId });
 
     if (query?.mes) {
       qb.andWhere("TO_CHAR(e.fechaInicio, 'YYYY-MM') = :mes", { mes: query.mes });
@@ -109,12 +122,6 @@ export class EventosMaestrosService {
     if (query?.estado) {
       qb.andWhere('e.estado = :estado', { estado: query.estado });
     }
-    if (query?.institutionId) {
-      qb.andWhere('e.institutionId = :institutionId', {
-        institutionId: query.institutionId,
-      });
-    }
-
     let rows = await qb.getMany();
     let result = rows.map((row) => this.toResponse(row));
 
@@ -175,7 +182,11 @@ export class EventosMaestrosService {
   ): Promise<MaestroEventoResponse> {
     const institutionId = requireMaestrosInstitutionId(req);
     const current = await this.getOrFail(id);
-    assertMaestroBelongsToInstitution(current, institutionId);
+    if (current.institutionId == null) {
+      current.institutionId = institutionId;
+    } else {
+      assertMaestroBelongsToInstitution(current, institutionId);
+    }
     const vis =
       dto.visibilidad !== undefined ||
       dto.destinatarios !== undefined ||
@@ -191,32 +202,38 @@ export class EventosMaestrosService {
           })
         : null;
 
-    Object.assign(current, {
-      ...dto,
-      titulo: dto.titulo !== undefined ? dto.titulo.trim() : current.titulo,
-      descripcion:
-        dto.descripcion !== undefined ? dto.descripcion.trim() : current.descripcion,
-      lugar: dto.lugar !== undefined ? dto.lugar.trim() : current.lugar,
-      responsable:
-        dto.responsable !== undefined ? dto.responsable.trim() : current.responsable,
-      horaInicio:
-        dto.horaInicio !== undefined ? dto.horaInicio.trim() : current.horaInicio,
-      horaFin: dto.horaFin !== undefined ? dto.horaFin?.trim() || null : current.horaFin,
-      ...(vis
-        ? {
-            visibilidad: vis.visibilidad,
-            destinatarios: vis.destinatarios,
-            nivel: vis.nivel,
-            grado: vis.grado,
-            seccion: vis.seccion,
-          }
-        : {}),
-    });
+    if (dto.titulo !== undefined) current.titulo = dto.titulo.trim();
+    if (dto.descripcion !== undefined) current.descripcion = dto.descripcion.trim();
+    if (dto.tipo !== undefined) current.tipo = dto.tipo as Evento['tipo'];
+    if (dto.fechaInicio !== undefined) {
+      current.fechaInicio = toEventDateYmd(dto.fechaInicio);
+    }
+    if (dto.fechaFin !== undefined) {
+      current.fechaFin = dto.fechaFin ? toEventDateYmd(dto.fechaFin) : null;
+    }
+    if (dto.lugar !== undefined) current.lugar = dto.lugar.trim();
+    if (dto.responsable !== undefined) current.responsable = dto.responsable.trim();
+    if (dto.horaInicio !== undefined) current.horaInicio = dto.horaInicio.trim();
+    if (dto.horaFin !== undefined) {
+      current.horaFin = dto.horaFin?.trim() || null;
+    }
+    if (dto.publicado !== undefined) current.publicado = dto.publicado;
+    if (vis) {
+      current.visibilidad = vis.visibilidad;
+      current.destinatarios = vis.destinatarios;
+      current.nivel = vis.nivel;
+      current.grado = vis.grado;
+      current.seccion = vis.seccion;
+    }
 
     if (dto.estado !== undefined || dto.cancelado !== undefined) {
+      const canceladoFlag =
+        dto.estado !== undefined
+          ? dto.estado === 'cancelado'
+          : (dto.cancelado ?? current.cancelado);
       const estado = normalizeEventEstado({
         estado: dto.estado ?? current.estado,
-        cancelado: dto.cancelado ?? current.cancelado,
+        cancelado: canceladoFlag,
         fechaInicio: current.fechaInicio,
         fechaFin: current.fechaFin,
       });
@@ -224,8 +241,15 @@ export class EventosMaestrosService {
       current.cancelado = canceladoFromEstado(estado);
       if (estado === 'cancelado') {
         current.publicado = false;
+      } else if (dto.estado !== undefined && dto.publicado === undefined) {
+        current.publicado = true;
       }
     }
+
+    current.fechaInicio = toEventDateYmd(current.fechaInicio);
+    current.fechaFin = current.fechaFin
+      ? toEventDateYmd(current.fechaFin)
+      : null;
 
     const saved = await this.eventoRepo.save(current);
     return this.toResponse(saved);
@@ -237,7 +261,11 @@ export class EventosMaestrosService {
   ): Promise<{ deleted: boolean; id: number }> {
     const institutionId = requireMaestrosInstitutionId(req);
     const current = await this.getOrFail(id);
-    assertMaestroBelongsToInstitution(current, institutionId);
+    if (current.institutionId == null) {
+      current.institutionId = institutionId;
+    } else {
+      assertMaestroBelongsToInstitution(current, institutionId);
+    }
     current.cancelado = true;
     current.estado = 'cancelado';
     current.publicado = false;
@@ -318,12 +346,7 @@ export class EventosMaestrosService {
 
   private async syncEstadosLegacy(): Promise<void> {
     const rows = await this.eventoRepo.find();
-    const pending = rows.filter((row) => {
-      const expected = row.cancelado
-        ? 'cancelado'
-        : computeEstadoFromDates(row.fechaInicio, row.fechaFin);
-      return !row.estado || (row.estado === 'programado' && expected !== 'programado');
-    });
+    const pending = rows.filter((row) => !row.estado);
     if (!pending.length) return;
 
     await this.eventoRepo.save(
@@ -332,6 +355,9 @@ export class EventosMaestrosService {
         estado: row.cancelado
           ? 'cancelado'
           : computeEstadoFromDates(row.fechaInicio, row.fechaFin),
+        cancelado: row.cancelado ?? canceladoFromEstado(
+          computeEstadoFromDates(row.fechaInicio, row.fechaFin),
+        ),
       })),
     );
   }

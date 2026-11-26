@@ -210,7 +210,25 @@ export class WaitlistService {
 
     }
 
-
+    const grado = gradoInstitucionalToMatricula(dto.nivel, dto.grado);
+    const occupancy = await this.salonesService.getSectionOccupancy(
+      dto.nivel,
+      grado,
+      new Date().getFullYear(),
+    );
+    const seccion = dto.seccionDeseada?.trim().toUpperCase();
+    if (seccion) {
+      const match = occupancy.find((item) => item.seccion === seccion);
+      if (match && match.disponibles > 0) {
+        throw new BadRequestException(
+          `La sección ${seccion} tiene ${match.disponibles} vacante(s). Matricule al estudiante en lugar de encolarlo.`,
+        );
+      }
+    } else if (occupancy.some((item) => item.disponibles > 0)) {
+      throw new BadRequestException(
+        'Hay vacantes en este grado. La lista de espera es para cuando no queda cupo.',
+      );
+    }
 
     const saved = await this.waitlistRepo.save(
 

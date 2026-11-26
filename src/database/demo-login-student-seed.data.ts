@@ -31,7 +31,6 @@ export const DEMO_STUDENT_ATTENDANCES_2026: DemoAttendanceSeed[] = [
   { fecha: '2026-05-06', estado: 'P' },
   { fecha: '2026-05-07', estado: 'T', observacion: 'Ingreso 12 minutos tarde' },
   { fecha: '2026-05-08', estado: 'P' },
-  { fecha: '2026-05-09', estado: 'F', observacion: 'Malestar estomacal' },
   { fecha: '2026-05-12', estado: 'J', observacion: 'Justificada por cita médica' },
   { fecha: '2026-05-13', estado: 'P' },
   { fecha: '2026-05-14', estado: 'P' },
@@ -53,10 +52,8 @@ export const DEMO_STUDENT_ATTENDANCES_2026: DemoAttendanceSeed[] = [
   { fecha: '2026-07-08', estado: 'T', observacion: 'Ingreso 5 minutos tarde' },
   { fecha: '2026-07-09', estado: 'P' },
   { fecha: '2026-07-10', estado: 'P' },
-  { fecha: '2026-07-11', estado: 'P' },
   { fecha: '2026-07-14', estado: 'P' },
   { fecha: '2026-07-15', estado: 'P' },
   { fecha: '2026-07-16', estado: 'P' },
   { fecha: '2026-07-17', estado: 'P' },
-  { fecha: '2026-07-18', estado: 'P' },
 ];

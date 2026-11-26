@@ -499,7 +499,15 @@ export class DatabaseSeedService {
             fecha: row.fecha.replace(/^2026/, String(anio)),
           }));
 
-    const pendientes = rows.filter((row) => !fechasExistentes.has(row.fecha));
+    const hoy = new Date();
+    const hoyIso = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+    const pendientes = rows.filter((row) => {
+      if (fechasExistentes.has(row.fecha)) return false;
+      if (row.fecha > hoyIso) return false;
+      const [y, m, d] = row.fecha.split('-').map(Number);
+      const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      return dow >= 1 && dow <= 5;
+    });
     if (!pendientes.length) {
       return;
     }

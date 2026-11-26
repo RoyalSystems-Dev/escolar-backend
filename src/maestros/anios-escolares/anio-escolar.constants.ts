@@ -1,3 +1,7 @@
+/** Años lectivos que se listan y se pueden registrar (oculta registros fuera de rango, p. ej. 2064). */
+export const ANIO_ESCOLAR_REGISTRO_MIN = 2024;
+export const ANIO_ESCOLAR_REGISTRO_MAX = 2027;
+
 export const PERMISO_CALENDARIZACION_VER = 'calendarizacion.ver';
 export const PERMISO_CALENDARIZACION_GESTIONAR = 'calendarizacion.gestionar';
 

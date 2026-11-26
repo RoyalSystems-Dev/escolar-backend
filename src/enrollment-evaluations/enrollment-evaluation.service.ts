@@ -162,14 +162,24 @@ export class EnrollmentEvaluationService {
       );
     }
 
-    const [rows, totalItems] = await qb
-      .orderBy('e.createdAt', 'DESC')
-      .skip((page - 1) * pageSize)
-      .take(pageSize)
-      .getManyAndCount();
+    const rows = await qb.orderBy('e.createdAt', 'DESC').getMany();
+    const vistos = new Set<string>();
+    const unicas = rows.filter((row) => {
+      const persona =
+        row.candidatoDni?.trim() ||
+        (row.waitlistEntryId ? `w:${row.waitlistEntryId}` : '') ||
+        (row.studentId ? `s:${row.studentId}` : '') ||
+        row.candidatoNombre.trim().toLowerCase();
+      const key = `${persona}|${row.tipoEvaluacion}|${row.anioEscolar}`;
+      if (vistos.has(key)) return false;
+      vistos.add(key);
+      return true;
+    });
+    const totalItems = unicas.length;
+    const pageRows = unicas.slice((page - 1) * pageSize, page * pageSize);
 
     return {
-      items: rows.map((row) => this.toResponse(row)),
+      items: pageRows.map((row) => this.toResponse(row)),
       pagination: {
         page,
         pageSize,

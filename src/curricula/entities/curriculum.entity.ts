@@ -5,7 +5,7 @@ export type CurriculumTipoEscala = 'numerica' | 'literal' | 'competencia';
 export type CurriculumTipoPeriodo = 'bimestral' | 'trimestral';
 
 @Entity('curricula')
-@Index(['institutionId', 'anio', 'nivel'])
+@Index(['institutionId', 'anio', 'nivel', 'seccion'], { unique: true })
 export class Curriculum {
   @PrimaryGeneratedColumn()
   id: number;
@@ -18,6 +18,10 @@ export class Curriculum {
 
   @Column({ length: 20 })
   nivel: string;
+
+  /** Vacío: cubre todas las secciones del nivel. Si tiene valor, solo esa sección. */
+  @Column({ length: 10, default: '' })
+  seccion: string;
 
   @Column({ length: 15, default: 'borrador' })
   estado: CurriculumEstado;

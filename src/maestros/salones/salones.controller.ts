@@ -3,15 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { SalonesService } from './salones.service';
 import { CreateSalonDto, SyncSalonesDto, UpdateSalonDto } from './dto/salon.dto';
 import { MaestrosAuthRequest } from '../common/maestros-tenant.util';
@@ -43,6 +45,33 @@ export class SalonesController {
       },
       req,
     );
+  }
+
+  @Get('vacancies/export')
+  @RequirePermiso('matricula.exportar', 'matricula.ver', 'matricula.vacantes')
+  @UseGuards(PermisoGuard)
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportVacancies(
+    @Query('anioEscolar') anioEscolar?: string,
+    @Query('nivel') nivel?: string,
+    @Query('grado') grado?: string,
+    @Req() req?: Request,
+    @Res() res?: Response,
+  ) {
+    const anio = anioEscolar ? Number(anioEscolar) : new Date().getFullYear();
+    const csv = await this.salonesService.exportVacanciesCsv(
+      {
+        anioEscolar: anio,
+        nivel,
+        grado,
+      },
+      req as MaestrosAuthRequest,
+    );
+    res!.setHeader(
+      'Content-Disposition',
+      `attachment; filename="vacantes-${anio}.csv"`,
+    );
+    res!.send(`\uFEFF${csv}`);
   }
 
   @Get('vacancies')

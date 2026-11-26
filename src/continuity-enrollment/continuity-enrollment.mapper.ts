@@ -51,8 +51,18 @@ export function seccionPropuesta(
 export function situacionFromPromedio(
   promedio: number,
   notaMinima = 11,
+  aptoPromocion?: boolean,
 ): ContinuityEnrollment['situacion'] {
-  return promedio >= notaMinima ? 'promovido' : 'repitente';
+  const apto =
+    aptoPromocion ??
+    (promedio > 0 && promedio >= notaMinima);
+  return apto ? 'promovido' : 'repitente';
+}
+
+export function situacionRequierePromocion(
+  situacion: ContinuityEnrollment['situacion'],
+): boolean {
+  return situacion === 'promovido' || situacion === 'egresado';
 }
 
 export interface ContinuityCandidateResponse {
@@ -66,6 +76,8 @@ export interface ContinuityCandidateResponse {
   gradoActual: string;
   seccionActual: string;
   promedioFinal: number;
+  tieneNotasAprobatorias: boolean;
+  aptoPromocion: boolean;
   situacion: ContinuityEnrollment['situacion'];
   gradoPropuesto: string;
   seccionPropuesta: string;
@@ -104,6 +116,7 @@ export function toCandidateResponse(
   promedio: number,
   situacion: ContinuityEnrollment['situacion'],
   generado: boolean,
+  stats?: { tieneNotasAprobatorias: boolean; aptoPromocion: boolean },
 ): ContinuityCandidateResponse {
   const gradoActual = gradoLabelFromStudent(student);
   const nivelNorm = student.nivel.trim().toLowerCase();
@@ -126,6 +139,8 @@ export function toCandidateResponse(
     gradoActual,
     seccionActual: student.seccion,
     promedioFinal: promedio,
+    tieneNotasAprobatorias: stats?.tieneNotasAprobatorias ?? false,
+    aptoPromocion: stats?.aptoPromocion ?? false,
     situacion,
     gradoPropuesto: gradoSig(gradoActual, situacion),
     seccionPropuesta: seccionPropuesta(situacion, student.seccion),

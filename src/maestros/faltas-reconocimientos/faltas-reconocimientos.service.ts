@@ -134,6 +134,14 @@ export class FaltasReconocimientosService {
     if (dup) {
       throw new BadRequestException(`Ya existe un tipo con código "${codigo}"`);
     }
+    const nombre = dto.nombre.trim();
+    const existentes = await this.tipoRepo.find({ where: { institutionId } });
+    const dupNombre = existentes.find(
+      (t) => t.nombre.trim().toLowerCase() === nombre.toLowerCase(),
+    );
+    if (dupNombre) {
+      throw new BadRequestException(`Ya existe un tipo con el nombre "${nombre}"`);
+    }
 
     const saved = await this.tipoRepo.save(
       this.tipoRepo.create({
@@ -158,7 +166,17 @@ export class FaltasReconocimientosService {
     const institutionId = requireMaestrosInstitutionId(req);
     const tipo = await this.getTipoOrFail(id);
     assertMaestroBelongsToInstitution(tipo, institutionId);
-    if (dto.nombre !== undefined) tipo.nombre = dto.nombre.trim();
+    if (dto.nombre !== undefined) {
+      const nombre = dto.nombre.trim();
+      const existentes = await this.tipoRepo.find({ where: { institutionId } });
+      const dupNombre = existentes.find(
+        (t) => t.id !== tipo.id && t.nombre.trim().toLowerCase() === nombre.toLowerCase(),
+      );
+      if (dupNombre) {
+        throw new BadRequestException(`Ya existe un tipo con el nombre "${nombre}"`);
+      }
+      tipo.nombre = nombre;
+    }
     if (dto.categoria !== undefined) tipo.categoria = dto.categoria;
     if (dto.icon !== undefined) tipo.icon = dto.icon.trim() || 'description';
     if (dto.orden !== undefined) tipo.orden = dto.orden;

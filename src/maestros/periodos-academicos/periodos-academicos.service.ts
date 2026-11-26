@@ -10,7 +10,11 @@ import { DataSource, Repository } from 'typeorm';
 import { AuditLoggerService } from '../../audit-logs/audit-logger.service';
 import { Institution } from '../../institution/entities/institution.entity';
 import { CatalogCacheService } from '../../common/catalog-cache.service';
-import type { TipoPeriodoAnioEscolar } from '../anios-escolares/anio-escolar.constants';
+import {
+  ANIO_ESCOLAR_REGISTRO_MAX,
+  ANIO_ESCOLAR_REGISTRO_MIN,
+  type TipoPeriodoAnioEscolar,
+} from '../anios-escolares/anio-escolar.constants';
 import {
   fechasDefectoAnioEscolar,
   plantillaPeriodosAnioEscolar,
@@ -43,6 +47,8 @@ import {
   resolveMaestrosInstitutionId,
   resolveSeedInstitutionId,
 } from '../common/maestros-tenant.util';
+import { alinearAnioEscolarVigentePorFecha } from '../common/alinear-anio-escolar-vigente.util';
+import { formatIsoDate } from '../feriados/feriados.service';
 
 export interface PeriodoAcademicoActorContext {
   req: Request;
@@ -54,6 +60,7 @@ export interface AnioEscolarCatalogoItem {
   estado?: string;
   fechaInicio?: string;
   fechaFin?: string;
+  vigente?: boolean;
 }
 
 export interface DividirPeriodosResultado {
@@ -153,6 +160,12 @@ export class PeriodosAcademicosMaestrosService {
   async listCatalogoAniosEscolares(
     ctx?: PeriodoAcademicoActorContext,
   ): Promise<AnioEscolarCatalogoItem[]> {
+    const institutionId = ctx?.req
+      ? resolveMaestrosInstitutionId(ctx.req)
+      : undefined;
+    if (institutionId != null) {
+      await this.ensureAnioEscolarVigente(institutionId);
+    }
     const aniosInstitucion = await this.resolveAniosInstitucion(ctx?.req);
     const cacheKey = `periodos:catalogo-anios:${JSON.stringify(aniosInstitucion ?? 'all')}`;
     return this.catalogCache.wrap(
@@ -176,19 +189,26 @@ export class PeriodosAcademicosMaestrosService {
           .createQueryBuilder('a')
           .where('a.activo = true')
           .andWhere('a.anio IN (:...anios)', { anios: aniosInstitucion })
+          .andWhere('a.anio >= :anioMin', { anioMin: ANIO_ESCOLAR_REGISTRO_MIN })
+          .andWhere('a.anio <= :anioMax', { anioMax: ANIO_ESCOLAR_REGISTRO_MAX })
           .orderBy('a.anio', 'DESC')
           .getMany()
-      : await this.anioEscolarRepo.find({
-          where: { activo: true },
-          order: { anio: 'DESC' },
-        });
+      : await this.anioEscolarRepo
+          .createQueryBuilder('a')
+          .where('a.activo = true')
+          .andWhere('a.anio >= :anioMin', { anioMin: ANIO_ESCOLAR_REGISTRO_MIN })
+          .andWhere('a.anio <= :anioMax', { anioMax: ANIO_ESCOLAR_REGISTRO_MAX })
+          .orderBy('a.anio', 'DESC')
+          .getMany();
     for (const row of anios) {
+      if (row.anio < ANIO_ESCOLAR_REGISTRO_MIN || row.anio > ANIO_ESCOLAR_REGISTRO_MAX) continue;
       map.set(row.anio, {
         anio: row.anio,
         tipoPeriodo: row.tipoPeriodo,
         estado: row.estado,
         fechaInicio: row.fechaInicio,
         fechaFin: row.fechaFin,
+        vigente: row.vigente,
       });
     }
 
@@ -211,14 +231,26 @@ export class PeriodosAcademicosMaestrosService {
 
     for (const row of desdePeriodos) {
       const anio = Number(row.anioEscolar);
-      if (!Number.isFinite(anio) || map.has(anio)) continue;
+      if (
+        !Number.isFinite(anio) ||
+        anio > ANIO_ESCOLAR_REGISTRO_MAX ||
+        anio < ANIO_ESCOLAR_REGISTRO_MIN ||
+        map.has(anio)
+      ) {
+        continue;
+      }
       map.set(anio, {
         anio,
         tipoPeriodo: (row.tipo as TipoPeriodoAnioEscolar) ?? 'bimestre',
       });
     }
 
-    return Array.from(map.values()).sort((a, b) => b.anio - a.anio);
+    return Array.from(map.values())
+      .filter(
+        (a) =>
+          a.anio >= ANIO_ESCOLAR_REGISTRO_MIN && a.anio <= ANIO_ESCOLAR_REGISTRO_MAX,
+      )
+      .sort((a, b) => b.anio - a.anio);
   }
 
   async findAll(
@@ -235,6 +267,15 @@ export class PeriodosAcademicosMaestrosService {
     if (ctx?.req && institutionId == null) return [];
 
     const aniosInstitucion = await this.resolveAniosInstitucion(ctx?.req);
+    if (institutionId != null) {
+      await this.ensureAnioEscolarVigente(institutionId);
+      const anio =
+        query?.anioEscolar ??
+        (await this.resolveAnioEscolarVigente(institutionId)) ??
+        aniosInstitucion?.[0] ??
+        new Date().getFullYear();
+      await this.alinearPeriodoActualPorFecha(institutionId, anio);
+    }
     const cacheKey = `periodos:list:${JSON.stringify({ ...query, institutionId, aniosInstitucion })}`;
     return this.catalogCache.wrap(cacheKey, () =>
       this.findAllUncached(query, institutionId, aniosInstitucion),
@@ -382,6 +423,7 @@ export class PeriodosAcademicosMaestrosService {
     await this.clearActual(institutionId, current.anioEscolar, id);
     current.actual = true;
     const saved = await this.periodoRepo.save(current);
+    await this.mirrorActualEnInstitucion(saved);
     this.catalogCache.invalidate('periodos:');
     this.auditPeriodo(ctx, 'actualizar', saved, 'Periodo marcado como vigente', {
       numero: saved.numero,
@@ -626,6 +668,19 @@ export class PeriodosAcademicosMaestrosService {
     numero: number,
     excludeId?: number,
   ): Promise<void> {
+    const anioInicio = Number(inicio.slice(0, 4));
+    const anioFin = Number(fin.slice(0, 4));
+    if (
+      anioInicio < anioEscolar ||
+      anioInicio > anioEscolar + 1 ||
+      anioFin < anioEscolar ||
+      anioFin > anioEscolar + 1
+    ) {
+      throw new BadRequestException(
+        `Las fechas del periodo deben caer en ${anioEscolar} o ${anioEscolar + 1}.`,
+      );
+    }
+
     const rango = await this.resolveRangoAnioEscolar(anioEscolar);
     try {
       assertPeriodoDentroDeAnioEscolar(inicio, fin, rango.fechaInicio, rango.fechaFin);
@@ -782,6 +837,7 @@ export class PeriodosAcademicosMaestrosService {
   /** Periodo académico marcado como actual en maestros. */
   async findPeriodoActual(): Promise<MaestroPeriodoAcademicoResponse | null> {
     return this.catalogCache.wrap('periodos:actual', async () => {
+      await this.alinearPeriodosActualesPorFechaHoy();
       const row = await this.findPeriodoActualRow();
       return row ? this.toResponse(row) : null;
     }, 60_000);
@@ -796,29 +852,62 @@ export class PeriodosAcademicosMaestrosService {
     return scope.anios;
   }
 
-  private async findPeriodoActualRow(): Promise<MaestroPeriodoAcademico | null> {
-    const inst = await this.dataSource.getRepository(Institution).findOne({
-      where: {},
-      order: { id: 'ASC' },
-    });
+  private async ensureAnioEscolarVigente(institutionId: number): Promise<void> {
+    const instRepo = this.dataSource.getRepository(Institution);
+    const inst = await instRepo.findOneBy({ id: institutionId });
+    if (!inst) return;
 
-    if (inst?.periodos?.length) {
-      const anioEscolar = Number(inst.anio) || new Date().getFullYear();
-      const marcado = inst.periodos.find((p) => p.actual);
-      const hoy = new Date().toISOString().slice(0, 10);
-      const porFecha = inst.periodos.find(
-        (p) => hoy >= p.inicio && hoy <= p.fin,
-      );
-      const elegido = marcado ?? porFecha;
-
-      if (elegido) {
-        await this.syncFromInstitution(inst);
-        return this.periodoRepo.findOne({
-          where: { anioEscolar, numero: elegido.numero, activo: true },
-        });
+    const anioInst = Number(inst.anio);
+    if (
+      Number.isFinite(anioInst) &&
+      anioInst >= ANIO_ESCOLAR_REGISTRO_MIN &&
+      anioInst <= ANIO_ESCOLAR_REGISTRO_MAX
+    ) {
+      const existe = await this.anioEscolarRepo.findOne({
+        where: { institutionId, anio: anioInst, activo: true },
+      });
+      if (!existe) {
+        const fechas = fechasDefectoAnioEscolar(anioInst);
+        await this.anioEscolarRepo.save(
+          this.anioEscolarRepo.create({
+            institutionId,
+            anio: anioInst,
+            ...fechas,
+            tipoPeriodo:
+              (inst.tipoPeriodo as MaestroAnioEscolar['tipoPeriodo']) ?? 'bimestre',
+            estado: 'activo',
+            vigente: false,
+            version: 1,
+            publicado: true,
+            motivo: 'Sincronizado desde configuración institucional',
+            activo: true,
+          }),
+        );
+        if (inst.periodos?.length) {
+          await this.syncFromInstitution(inst);
+        }
       }
     }
 
+    const r = await alinearAnioEscolarVigentePorFecha(
+      this.anioEscolarRepo,
+      instRepo,
+      institutionId,
+      formatIsoDate(new Date()),
+    );
+    if (r?.changed) this.catalogCache.invalidate('periodos:');
+  }
+
+  private async resolveAnioEscolarVigente(
+    institutionId: number,
+  ): Promise<number | undefined> {
+    const row = await this.anioEscolarRepo.findOne({
+      where: { institutionId, vigente: true, activo: true },
+    });
+    return row?.anio;
+  }
+
+  private async findPeriodoActualRow(): Promise<MaestroPeriodoAcademico | null> {
     const hoy = new Date().toISOString().slice(0, 10);
     const enCurso = await this.periodoRepo
       .createQueryBuilder('p')
@@ -836,6 +925,70 @@ export class PeriodosAcademicosMaestrosService {
     });
   }
 
+  /** Alinea el flag «actual» al periodo que contiene la fecha de hoy (por institución y año). */
+  private async alinearPeriodoActualPorFecha(
+    institutionId: number,
+    anioEscolar: number,
+  ): Promise<void> {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const periodos = await this.periodoRepo.find({
+      where: { institutionId, anioEscolar, activo: true },
+    });
+    const porFecha = periodos.find((p) => hoy >= p.inicio && hoy <= p.fin);
+    if (!porFecha) return;
+
+    const yaCorrecto =
+      porFecha.actual && periodos.filter((p) => p.actual).length === 1;
+    if (yaCorrecto) return;
+
+    await this.clearActual(institutionId, anioEscolar, porFecha.id);
+    porFecha.actual = true;
+    await this.periodoRepo.save(porFecha);
+    this.catalogCache.invalidate('periodos:');
+    await this.mirrorActualEnInstitucion(porFecha);
+  }
+
+  private async alinearPeriodosActualesPorFechaHoy(): Promise<void> {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const enCurso = await this.periodoRepo.find({
+      where: { activo: true },
+    });
+    const vistos = new Set<string>();
+    for (const p of enCurso) {
+      if (hoy < p.inicio || hoy > p.fin) continue;
+      if (p.institutionId == null) continue;
+      const key = `${p.institutionId}:${p.anioEscolar}`;
+      if (vistos.has(key)) continue;
+      vistos.add(key);
+      await this.alinearPeriodoActualPorFecha(p.institutionId, p.anioEscolar);
+    }
+  }
+
+  /** Refleja el periodo vigente en institution.periodos (config. institucional). */
+  private async mirrorActualEnInstitucion(
+    periodo: MaestroPeriodoAcademico,
+  ): Promise<void> {
+    if (!periodo.institutionId) return;
+    const repo = this.dataSource.getRepository(Institution);
+    const inst = await repo.findOneBy({ id: periodo.institutionId });
+    if (!inst?.periodos?.length) return;
+
+    let changed = false;
+    const next = inst.periodos.map((p) => {
+      const esActual = p.numero === periodo.numero;
+      if (p.actual !== esActual) changed = true;
+      return { ...p, actual: esActual };
+    });
+    if (!changed) return;
+    inst.periodos = next;
+    await repo.save(inst);
+  }
+
+  private fechaCoherenteConAnio(anio: number, iso: string): boolean {
+    const y = Number(iso.slice(0, 4));
+    return y === anio || y === anio + 1;
+  }
+
   /** Bimestres ya concluidos (fecha fin superada) — elegibles para acta de salon. */
   async resolveBimestresTerminados(anioEscolar?: number): Promise<number[]> {
     const anio = anioEscolar ?? (await this.resolveAnioEscolarActual());
@@ -844,6 +997,10 @@ export class PeriodosAcademicosMaestrosService {
       order: { numero: 'ASC' },
     });
     const today = new Date().toISOString().slice(0, 10);
-    return rows.filter((r) => today > r.fin).map((r) => r.numero);
+    return rows
+      .filter((r) => r.numero >= 1 && r.numero <= 4)
+      .filter((r) => this.fechaCoherenteConAnio(anio, r.fin))
+      .filter((r) => today > r.fin)
+      .map((r) => r.numero);
   }
 }

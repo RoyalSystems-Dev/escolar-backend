@@ -11,6 +11,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -54,6 +55,7 @@ export class FormulaEscalaLogroDto implements FormulaEscalaLogro {
 
 export class CreateMaestroFormulaEvaluacionDto {
   @IsString()
+  @MinLength(1)
   @MaxLength(120)
   nombre: string;
 

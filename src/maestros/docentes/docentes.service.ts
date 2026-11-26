@@ -308,7 +308,7 @@ export class DocentesMaestrosService implements OnModuleInit {
     req?: MaestrosAuthRequest,
   ): Promise<DocenteDetail> {
     const institutionId = resolveMaestrosInstitutionId(req);
-    const docente = await this.getDocenteOrFail(id);
+    const docente = await this.findDocenteByIdOrFail(id);
     if (institutionId != null) {
       assertMaestroBelongsToInstitution(docente, institutionId);
     }
@@ -568,7 +568,7 @@ export class DocentesMaestrosService implements OnModuleInit {
     req: MaestrosAuthRequest,
   ): Promise<DocenteDetail> {
     const institutionId = requireMaestrosInstitutionId(req);
-    const current = await this.getDocenteOrFail(id);
+    const current = await this.findDocenteByIdOrFail(id);
     assertMaestroBelongsToInstitution(current, institutionId);
 
     if (dto.nombres !== undefined) current.nombres = dto.nombres.trim();
@@ -620,21 +620,43 @@ export class DocentesMaestrosService implements OnModuleInit {
     id: number,
     req: MaestrosAuthRequest,
   ): Promise<{ deleted: boolean; id: number }> {
+    const result = await this.persistirEstado(id, 'inactivo', req);
+    return { deleted: true, id: result.id };
+  }
+
+  async activar(
+    id: number,
+    req: MaestrosAuthRequest,
+  ): Promise<{ id: number; estado: 'activo' }> {
+    return this.persistirEstado(id, 'activo', req);
+  }
+
+  private async persistirEstado<T extends 'activo' | 'inactivo'>(
+    id: number,
+    estado: T,
+    req: MaestrosAuthRequest,
+  ): Promise<{ id: number; estado: T }> {
     const institutionId = requireMaestrosInstitutionId(req);
-    const current = await this.getDocenteOrFail(id);
+    const current = await this.findDocenteByIdOrFail(id);
     assertMaestroBelongsToInstitution(current, institutionId);
-    current.estado = 'inactivo';
+    current.estado = estado;
     await this.docenteRepo.save(current);
 
     if (current.userId) {
       const user = await this.usersRepo.findOneBy({ id: current.userId });
       if (user) {
-        user.estado = 'inactivo';
+        user.estado = estado;
         await this.usersRepo.save(user);
       }
     }
 
-    return { deleted: true, id };
+    return { id, estado };
+  }
+
+  private async findDocenteByIdOrFail(id: number): Promise<Docente> {
+    const docente = await this.docenteRepo.findOneBy({ id });
+    if (!docente) throw new NotFoundException(`Docente ${id} no encontrado`);
+    return docente;
   }
 
   /** Docentes activos para asignación académica y horarios. */
@@ -646,8 +668,7 @@ export class DocentesMaestrosService implements OnModuleInit {
   }
 
   async getDocenteOrFail(id: number): Promise<Docente> {
-    const docente = await this.docenteRepo.findOneBy({ id });
-    if (!docente) throw new NotFoundException(`Docente ${id} no encontrado`);
+    const docente = await this.findDocenteByIdOrFail(id);
     if (docente.estado !== 'activo') {
       throw new BadRequestException('El docente seleccionado no está activo');
     }
@@ -980,11 +1001,11 @@ export class DocentesMaestrosService implements OnModuleInit {
           continue;
         }
 
-        const totalAlumnos = alumnos.filter(
-          (s) =>
-            s.nivel === asg.nivel.trim() &&
-            normalizeGradoMatricula(s.grado) === gradoNorm &&
-            s.seccion.toUpperCase() === seccionNorm,
+        const totalAlumnos = listStudentsForAula(
+          alumnos,
+          asg.nivel,
+          gradoNorm,
+          seccionNorm,
         ).length;
 
         map.set(key, {

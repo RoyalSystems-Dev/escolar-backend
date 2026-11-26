@@ -28,6 +28,8 @@ import {
 import { StudentDocumentsResponse } from './dto/student-documents.dto';
 import {
   combinarRequisitosConDocumentos,
+  MENSAJE_REQUISITOS_SIN_DATOS,
+  requisitosConDatos,
   requisitosPorGrado,
   tiposEquivalentes,
 } from './document-requirements.constants';
@@ -309,25 +311,37 @@ export class StudentDocumentsService {
 
   async syncRequisitosMatricula(
     studentId: number,
+    requisitos?: Array<{ tipo?: string | null; obligatorio?: boolean }> | null,
   ): Promise<StudentDocumentsResponse> {
-    const student = await this.getStudentOrFail(studentId);
-    const gradoLabel = gradoLabelFromParts(student.nivel, student.grado);
-    const requisitos = requisitosPorGrado(gradoLabel);
+    const enviados = requisitosConDatos(requisitos);
+    if (!enviados.length) {
+      throw new BadRequestException(MENSAJE_REQUISITOS_SIN_DATOS);
+    }
+
+    await this.getStudentOrFail(studentId);
     const existing = await this.documentRepo.find({ where: { studentId } });
 
-    for (const req of requisitos) {
-      const yaExiste = existing.some((doc) =>
-        tiposEquivalentes(doc.tipo, req.tipo),
-      );
-      if (!yaExiste) {
-        await this.documentRepo.save(
-          this.documentRepo.create({
-            studentId,
-            tipo: req.tipo,
-            estado: 'pendiente',
-          }),
-        );
+    for (const req of enviados) {
+      const doc = existing.find((item) => tiposEquivalentes(item.tipo, req.tipo));
+      if (doc) {
+        if (req.numero) doc.numero = req.numero;
+        if (req.fechaEntrega) doc.fechaEntrega = req.fechaEntrega;
+        if (req.imagenUrl) doc.imagenUrl = req.imagenUrl;
+        if (req.estado !== 'pendiente') doc.estado = req.estado;
+        await this.documentRepo.save(doc);
+        continue;
       }
+      const saved = await this.documentRepo.save(
+        this.documentRepo.create({
+          studentId,
+          tipo: req.tipo,
+          numero: req.numero,
+          estado: req.estado,
+          fechaEntrega: req.fechaEntrega,
+          imagenUrl: req.imagenUrl,
+        }),
+      );
+      existing.push(saved);
     }
 
     return this.findStudentDocumentsMatricula(studentId);

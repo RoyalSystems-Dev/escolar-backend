@@ -21,8 +21,7 @@ describe('grading-range.util', () => {
     const high = validateNotaInRange(21, bounds);
     expect(low.valid).toBe(false);
     expect(high.valid).toBe(false);
-    expect(high.message).toContain('21');
-    expect(high.message).toContain('0–20');
+    expect(high.message).toBe('No se aceptan notas fuera de 0 a 20.');
   });
 
   it('assertNotaInRange lanza BadRequestException', () => {

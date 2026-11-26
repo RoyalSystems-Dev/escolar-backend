@@ -19,12 +19,28 @@ export class CreateCurriculumDto {
   nivel: string;
 
   @IsOptional()
+  @IsString()
+  seccion?: string;
+
+  @IsOptional()
   @IsIn(['numerica', 'literal', 'competencia'])
   tipoEscala?: 'numerica' | 'literal' | 'competencia';
 
   @IsOptional()
   @IsIn(['bimestral', 'trimestral'])
   tipoPeriodo?: 'bimestral' | 'trimestral';
+}
+
+export class CopyCurriculumDto {
+  @IsOptional()
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  anioDestino?: number;
+
+  @IsOptional()
+  @IsString()
+  seccionDestino?: string;
 }
 
 export class UpdateCurriculumDto {
@@ -43,6 +59,10 @@ export class UpdateCurriculumDto {
   @IsOptional()
   @IsIn(['bimestral', 'trimestral'])
   tipoPeriodo?: 'bimestral' | 'trimestral';
+
+  @IsOptional()
+  @IsString()
+  seccion?: string;
 }
 
 export class CreateCurriculumAreaDto {
@@ -112,6 +132,27 @@ export class CreateCurriculumSubjectDto {
   @IsOptional()
   @IsInt()
   maestroCursoId?: number;
+}
+
+export class CreateCurriculumCompetenciaDto {
+  @IsInt()
+  cursoId: number;
+
+  @IsString()
+  nombre: string;
+}
+
+export class CreateCurriculumCapacidadDto {
+  @IsInt()
+  competenciaId: number;
+
+  @IsString()
+  nombre: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  orden?: number;
 }
 
 export class UpdateCurriculumSubjectDto {

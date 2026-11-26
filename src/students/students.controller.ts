@@ -85,6 +85,15 @@ export class StudentsController {
       .then((saved) => this.studentsService.findExpediente(saved.id));
   }
 
+  @Get('documento-disponible')
+  @RequirePermiso('estudiantes.crear', 'matricula.crear')
+  documentoDisponible(
+    @Query('numero') numero = '',
+    @Query('tipo') tipo?: string,
+  ) {
+    return this.studentsService.documentoDisponible(numero, tipo);
+  }
+
   @Get('sin-documento/context')
   @RequirePermiso('estudiantes.crear', 'matricula.crear')
   getSinDocumentoContext() {

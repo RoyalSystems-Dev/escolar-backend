@@ -21,11 +21,19 @@ import {
   isWeekday,
   parseIsoDate as parseCalendarDate,
 } from '../maestros/feriados/feriados.service';
-import { PeriodosAcademicosMaestrosService } from '../maestros/periodos-academicos/periodos-academicos.service';
+import {
+  MaestroPeriodoAcademicoResponse,
+  PeriodosAcademicosMaestrosService,
+} from '../maestros/periodos-academicos/periodos-academicos.service';
 import { SaveDailyRegisterDto } from './dto/daily-register.dto';
 import { NotifyApoderadoDto } from './dto/notify-apoderado.dto';
 import { normalizeGradoMatricula } from '../maestros/salones/salones.util';
 import { gradoLabelFromParts } from '../students/students.mapper';
+import {
+  etiquetaEstadoControl,
+  evaluarAsistenciaControl,
+  NivelAlertaControl,
+} from './control-report.util';
 import { Student } from '../students/entities/student.entity';
 import {
   JustificacionAdjuntoMeta,
@@ -34,6 +42,10 @@ import {
 import { existsSync, unlinkSync } from 'fs';
 import { join, sep } from 'path';
 import { MailService } from '../mail/mail.service';
+import {
+  esDiaLectivoLunesAViernes,
+  MENSAJE_ASISTENCIA_SOLO_LUNES_A_VIERNES,
+} from './dia-lectivo.util';
 
 export interface DailyRegisterRowResponse {
   studentId: number;
@@ -237,9 +249,9 @@ export interface ControlReportAlumno {
   presentes: number;
   totalRegistrado: number;
   totalDiasClase: number;
-  asistenciaPct: number;
+  asistenciaPct: number | null;
   ultimaFalta: string | null;
-  nivelAlerta: 'normal' | 'alerta' | 'critico';
+  nivelAlerta: NivelAlertaControl;
   calendario: Record<string, 'P' | 'F' | 'T' | 'J' | null>;
 }
 
@@ -258,6 +270,7 @@ export interface ControlReportResponse {
     conFaltas: number;
     totalFaltas: number;
     totalTardanzas: number;
+    sinRegistro: number;
     alerta: number;
     critico: number;
   };
@@ -302,15 +315,16 @@ export class AttendancesService {
     }
 
     const hoy = this.todayIso();
+    const fechaEsFutura = fecha > hoy;
     const anio = parseCalendarDate(fecha).getUTCFullYear();
-    const periodo = await this.getPeriodoActual(anio);
+    const periodo = await this.getPeriodoParaFecha(fecha);
     const feriado = await this.feriadosService.getFeriadoEnFecha(fecha, anio);
     const seccionNorm = seccion.trim().toUpperCase();
     const students = await this.findStudentsBySection(nivel, grado, seccionNorm, institutionId);
 
     const studentIds = students.map((s) => s.id);
     const attendances =
-      studentIds.length === 0
+      fechaEsFutura || studentIds.length === 0
         ? []
         : await this.attendancesRepository
             .createQueryBuilder('a')
@@ -376,10 +390,14 @@ export class AttendancesService {
     const seccionNorm = seccion.trim().toUpperCase();
     const students = await this.findStudentsBySection(nivel, grado, seccionNorm, institutionId);
     const studentIds = students.map((s) => s.id);
-    const periodo = await this.getPeriodoActual(year);
     const grid = this.buildMonthGrid(year, month);
     const desde = grid[0].fecha;
     const hasta = grid[grid.length - 1].fecha;
+    const periodosRango = await this.loadPeriodosActivosEnRango(desde, hasta);
+    const periodoSeleccionado = this.periodoQueContieneFecha(
+      fechaSeleccionada,
+      periodosRango,
+    );
 
     const feriados = await this.feriadosService.findAll({
       anioEscolar: year,
@@ -400,6 +418,7 @@ export class AttendancesService {
         .where('a.studentId IN (:...studentIds)', { studentIds })
         .andWhere('a.fecha >= :desde', { desde })
         .andWhere('a.fecha <= :hasta', { hasta })
+        .andWhere('a.fecha <= :hoy', { hoy })
         .groupBy("TO_CHAR(a.fecha, 'YYYY-MM-DD')")
         .getRawMany<{ fecha: string; count: string }>();
 
@@ -412,7 +431,8 @@ export class AttendancesService {
     const dias: DailyRegisterCalendarDay[] = grid.map((cell) => {
       const feriado = feriadoMap.get(cell.fecha) ?? null;
       const esFinDeSemana = !isWeekday(parseCalendarDate(cell.fecha));
-      const fueraDePeriodo = !this.isWithinPeriodo(cell.fecha, periodo);
+      const periodoCelda = this.periodoQueContieneFecha(cell.fecha, periodosRango);
+      const fueraDePeriodo = periodoCelda == null;
       const esDiaClase =
         cell.esMesActual &&
         !esFinDeSemana &&
@@ -447,12 +467,12 @@ export class AttendancesService {
       mesLabel: this.formatMonthLabel(year, month),
       fechaHoy: hoy,
       fechaSeleccionada,
-      periodoActual: periodo
+      periodoActual: periodoSeleccionado
         ? {
-            id: periodo.id,
-            nombre: periodo.nombre,
-            inicio: periodo.inicio,
-            fin: periodo.fin,
+            id: periodoSeleccionado.id,
+            nombre: periodoSeleccionado.nombre,
+            inicio: periodoSeleccionado.inicio,
+            fin: periodoSeleccionado.fin,
           }
         : null,
       totalAlumnos,
@@ -464,29 +484,7 @@ export class AttendancesService {
 
   async saveDailyRegister(dto: SaveDailyRegisterDto, institutionId?: number) {
     const fecha = dto.fecha.slice(0, 10);
-    const anio = parseCalendarDate(fecha).getUTCFullYear();
-    const periodo = await this.getPeriodoActual(anio);
-
-    if (!isWeekday(parseCalendarDate(fecha))) {
-      throw new BadRequestException(
-        'No se puede registrar asistencia en fin de semana',
-      );
-    }
-
-    if (!this.isWithinPeriodo(fecha, periodo)) {
-      throw new BadRequestException(
-        periodo
-          ? `La fecha ${fecha} está fuera del periodo académico actual (${periodo.nombre}: ${periodo.inicio} — ${periodo.fin})`
-          : `La fecha ${fecha} está fuera del calendario escolar`,
-      );
-    }
-
-    const feriado = await this.feriadosService.getFeriadoEnFecha(fecha, anio);
-    if (feriado) {
-      throw new BadRequestException(
-        `No se puede registrar asistencia: ${fecha} es feriado (${feriado.nombre})`,
-      );
-    }
+    await this.assertFechaAsistenciaRegistrable(fecha);
 
     const seccionNorm = dto.seccion.trim().toUpperCase();
     const students = await this.findStudentsBySection(
@@ -546,12 +544,7 @@ export class AttendancesService {
 
   async create(createAttendanceDto: CreateAttendanceDto, institutionId?: number) {
     const fecha = createAttendanceDto.fecha?.slice(0, 10) ?? createAttendanceDto.fecha;
-    const feriado = await this.feriadosService.getFeriadoEnFecha(fecha);
-    if (feriado) {
-      throw new BadRequestException(
-        `No se puede registrar asistencia: ${fecha} es feriado (${feriado.nombre})`,
-      );
-    }
+    await this.assertFechaAsistenciaRegistrable(fecha);
 
     const alumno = await this.studentsService.findOne(createAttendanceDto.studentId);
     if (institutionId !== undefined && alumno.institutionId !== institutionId) {
@@ -592,6 +585,11 @@ export class AttendancesService {
       qb.andWhere('a.fecha <= :hasta', { hasta: `${query.anioEscolar}-12-31` });
     }
 
+    // El alumno y el apoderado consultan este listado. Un día futuro o de
+    // fin de semana no es lectivo: el registro diario ya lo rechaza.
+    qb.andWhere('a.fecha <= :hoyLectivo', { hoyLectivo: this.todayIso() });
+    qb.andWhere('EXTRACT(DOW FROM a.fecha) BETWEEN 1 AND 5');
+
     return qb.getMany();
   }
 
@@ -601,6 +599,12 @@ export class AttendancesService {
 
   async update(id: number, updateAttendanceDto: UpdateAttendanceDto) {
     const current = await this.getOrFail(id);
+    const fecha =
+      updateAttendanceDto.fecha?.slice(0, 10) ??
+      this.normalizeFechaKey(current.fecha);
+    if (updateAttendanceDto.fecha !== undefined || updateAttendanceDto.estado !== undefined) {
+      await this.assertFechaAsistenciaRegistrable(fecha);
+    }
     const merged = this.attendancesRepository.merge(
       current,
       updateAttendanceDto,
@@ -710,11 +714,13 @@ export class AttendancesService {
       const records = byStudent.get(student.id) ?? [];
       const stats = this.computeAbsenceStats(records);
       const faltasPendientes = this.mapPendingAbsenceDetails(records);
-      const faltasFueraDePlazo = records.filter(
-        (a) =>
-          a.estado === 'F' &&
-          !this.isWithinJustificationDeadline(this.normalizeFechaKey(a.fecha)),
-      ).length;
+      const hoy = this.todayIso();
+      const faltasFueraDePlazo = records.filter((a) => {
+        if (a.estado !== 'F') return false;
+        const fecha = this.normalizeFechaKey(a.fecha);
+        if (fecha > hoy || !isWeekday(parseCalendarDate(fecha))) return false;
+        return !this.isWithinJustificationDeadline(fecha, hoy);
+      }).length;
 
       if (faltasPendientes.length === 0) continue;
 
@@ -1177,7 +1183,6 @@ export class AttendancesService {
     const year = Number(yearStr);
     const month = Number(monthStr);
     const alertSettings = await this.getAlertSettings(query?.institutionId);
-    const periodo = await this.getPeriodoActual(year);
 
     const students = await this.filterStudentsForControl(query);
     const studentIds = students.map((s) => s.id);
@@ -1186,6 +1191,7 @@ export class AttendancesService {
     const diasMes = grid.filter((c) => c.esMesActual);
     const desde = diasMes[0]?.fecha ?? `${mes}-01`;
     const hasta = diasMes[diasMes.length - 1]?.fecha ?? `${mes}-28`;
+    const periodosRango = await this.loadPeriodosActivosEnRango(desde, hasta);
 
     const feriados = await this.feriadosService.findAll({
       anioEscolar: year,
@@ -1200,7 +1206,8 @@ export class AttendancesService {
     const diasEscolares: ControlReportDiaEscolar[] = [];
     for (const cell of diasMes) {
       const esFinDeSemana = !isWeekday(parseCalendarDate(cell.fecha));
-      const fueraDePeriodo = !this.isWithinPeriodo(cell.fecha, periodo);
+      const fueraDePeriodo =
+        this.periodoQueContieneFecha(cell.fecha, periodosRango) == null;
       const feriado = feriadoMap.get(cell.fecha);
       const esDiaClase =
         !esFinDeSemana && !feriado && !fueraDePeriodo;
@@ -1241,22 +1248,27 @@ export class AttendancesService {
     }
 
     for (const att of attendances) {
-      if (!resumenPorDia[att.fecha]) continue;
-      if (att.estado === 'F') resumenPorDia[att.fecha].F++;
-      if (att.estado === 'T') resumenPorDia[att.fecha].T++;
-      if (att.estado === 'J') resumenPorDia[att.fecha].J++;
+      const fecha = this.normalizeFechaKey(att.fecha);
+      if (fecha > hoy || !resumenPorDia[fecha]) continue;
+      if (att.estado === 'F') resumenPorDia[fecha].F++;
+      if (att.estado === 'T') resumenPorDia[fecha].T++;
+      if (att.estado === 'J') resumenPorDia[fecha].J++;
     }
 
     const diasClaseHastaHoy = diasEscolares.filter((d) => !d.esFuturo).length;
 
     const alumnos: ControlReportAlumno[] = students.map((student) => {
-      const records = byStudent.get(student.id) ?? [];
+      const records = (byStudent.get(student.id) ?? []).filter((rec) => {
+        const fecha = this.normalizeFechaKey(rec.fecha);
+        const dia = diasEscolares.find((d) => d.fecha === fecha);
+        return !!dia && !dia.esFuturo;
+      });
       const calendario: Record<string, 'P' | 'F' | 'T' | 'J' | null> = {};
       for (const dia of diasEscolares) {
         calendario[dia.fecha] = null;
       }
       for (const rec of records) {
-        calendario[rec.fecha] = rec.estado;
+        calendario[this.normalizeFechaKey(rec.fecha)] = rec.estado;
       }
 
       const presentes = records.filter((r) => r.estado === 'P').length;
@@ -1265,19 +1277,18 @@ export class AttendancesService {
       const faltasInjustificadas = records.filter((r) => r.estado === 'F').length;
       const faltas = faltasInjustificadas + justificadas;
       const totalRegistrado = records.length;
-      const asistenciaPct =
-        totalRegistrado > 0
-          ? Math.round(((presentes + tardanzas) / totalRegistrado) * 100)
-          : 0;
+      const evaluacion = evaluarAsistenciaControl({
+        totalRegistrado,
+        presentes,
+        tardanzas,
+        faltasInjustificadas,
+        diasAlertaAusentismo: alertSettings.diasAlertaAusentismo,
+        diasAlertaCritica: alertSettings.diasAlertaCritica,
+      });
 
       const ultimaFaltaRec = records
         .filter((r) => r.estado === 'F')
         .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
-
-      const nivelAlerta = this.resolveControlAlertLevel(
-        faltasInjustificadas,
-        alertSettings,
-      );
 
       return {
         studentId: student.id,
@@ -1296,11 +1307,11 @@ export class AttendancesService {
         presentes,
         totalRegistrado,
         totalDiasClase: diasClaseHastaHoy,
-        asistenciaPct,
+        asistenciaPct: evaluacion.asistenciaPct,
         ultimaFalta: ultimaFaltaRec
           ? this.formatDate(ultimaFaltaRec.fecha)
           : null,
-        nivelAlerta,
+        nivelAlerta: evaluacion.nivelAlerta,
         calendario,
       };
     });
@@ -1320,6 +1331,7 @@ export class AttendancesService {
         conFaltas: alumnos.filter((a) => a.faltas > 0).length,
         totalFaltas: alumnos.reduce((s, a) => s + a.faltas, 0),
         totalTardanzas: alumnos.reduce((s, a) => s + a.tardanzas, 0),
+        sinRegistro: alumnos.filter((a) => a.nivelAlerta === 'sin_registro').length,
         alerta: alumnos.filter((a) => a.nivelAlerta === 'alerta').length,
         critico: alumnos.filter((a) => a.nivelAlerta === 'critico').length,
       },
@@ -1336,7 +1348,8 @@ export class AttendancesService {
         : s;
     };
 
-    const dayHeaders = report.diasEscolares.map(
+    const diasContables = report.diasEscolares.filter((d) => !d.esFuturo);
+    const dayHeaders = diasContables.map(
       (d) => `${d.diaSemana} ${d.label}`,
     );
     const header = [
@@ -1357,23 +1370,22 @@ export class AttendancesService {
     ];
 
     const rows = report.alumnos.map((a) => {
-      const dayCols = report.diasEscolares.map((d) => {
-        const st = a.calendario[d.fecha];
-        return st ?? '';
-      });
+      const dayCols = diasContables.map((d) => a.calendario[d.fecha] ?? '');
+      const sinMarca = a.nivelAlerta === 'sin_registro';
+      const conteo = (n: number) => (sinMarca ? '' : n);
       return [
         a.nombreCompleto,
         a.dni,
         a.nivel,
         a.grado,
         a.seccion,
-        a.faltas,
-        a.faltasInjustificadas,
-        a.tardanzas,
-        a.justificadas,
-        a.presentes,
-        `${a.asistenciaPct}%`,
-        a.nivelAlerta,
+        conteo(a.faltas),
+        conteo(a.faltasInjustificadas),
+        conteo(a.tardanzas),
+        conteo(a.justificadas),
+        conteo(a.presentes),
+        a.asistenciaPct == null ? '' : `${a.asistenciaPct}%`,
+        etiquetaEstadoControl(a.nivelAlerta),
         a.ultimaFalta ?? '',
         ...dayCols,
       ]
@@ -1421,15 +1433,6 @@ export class AttendancesService {
     return students.sort((a, b) =>
       `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`, 'es'),
     );
-  }
-
-  private resolveControlAlertLevel(
-    faltasInjustificadas: number,
-    settings: AlertSettingsResponse,
-  ): 'normal' | 'alerta' | 'critico' {
-    if (faltasInjustificadas > settings.diasAlertaCritica) return 'critico';
-    if (faltasInjustificadas > settings.diasAlertaAusentismo) return 'alerta';
-    return 'normal';
   }
 
   private resolveAbsenceAlertLevel(
@@ -1622,11 +1625,7 @@ export class AttendancesService {
   private mapPendingAbsenceDetails(records: Attendance[]): FaltaPendienteDetalle[] {
     const hoy = this.todayIso();
     return records
-      .filter(
-        (a) =>
-          a.estado === 'F' &&
-          this.isWithinJustificationDeadline(this.normalizeFechaKey(a.fecha), hoy),
-      )
+      .filter((a) => this.isAbsenceEligibleForJustification(a, hoy))
       .map((a) => {
         const fecha = this.normalizeFechaKey(a.fecha);
         const diasTranscurridos = this.daysSinceDate(fecha, hoy);
@@ -1648,10 +1647,48 @@ export class AttendancesService {
     fechaIso: string,
     refIso: string = this.todayIso(),
   ): boolean {
-    return (
-      this.daysSinceDate(fechaIso, refIso) <=
-      AttendancesService.DIAS_PLAZO_JUSTIFICACION
-    );
+    if (fechaIso > refIso) return false;
+    const dias = this.daysSinceDate(fechaIso, refIso);
+    if (dias < 0) return false;
+    return dias <= AttendancesService.DIAS_PLAZO_JUSTIFICACION;
+  }
+
+  /** Solo faltas ya ocurridas en día hábil (excluye futuro, domingo/sábado y plazo vencido). */
+  private isAbsenceEligibleForJustification(
+    attendance: Attendance,
+    hoy: string = this.todayIso(),
+  ): boolean {
+    if (attendance.estado !== 'F') return false;
+    const fecha = this.normalizeFechaKey(attendance.fecha);
+    if (fecha > hoy) return false;
+    if (!isWeekday(parseCalendarDate(fecha))) return false;
+    return this.isWithinJustificationDeadline(fecha, hoy);
+  }
+
+  private async assertFechaAsistenciaRegistrable(fecha: string): Promise<void> {
+    const iso = fecha.slice(0, 10);
+    const hoy = this.todayIso();
+    if (iso > hoy) {
+      throw new BadRequestException(
+        `No se puede registrar asistencia en fechas futuras (${iso})`,
+      );
+    }
+    if (!esDiaLectivoLunesAViernes(iso)) {
+      throw new BadRequestException(MENSAJE_ASISTENCIA_SOLO_LUNES_A_VIERNES);
+    }
+    const periodo = await this.getPeriodoParaFecha(iso);
+    if (!periodo) {
+      throw new BadRequestException(
+        `La fecha ${iso} no pertenece a ningún periodo académico activo`,
+      );
+    }
+    const anio = parseCalendarDate(iso).getUTCFullYear();
+    const feriado = await this.feriadosService.getFeriadoEnFecha(iso, anio);
+    if (feriado) {
+      throw new BadRequestException(
+        `No se puede registrar asistencia: ${iso} es feriado (${feriado.nombre})`,
+      );
+    }
   }
 
   private oldestJustifiableDateIso(refIso: string = this.todayIso()): string {
@@ -1660,6 +1697,22 @@ export class AttendancesService {
 
   private assertJustificationDeadline(absences: Attendance[]): void {
     const hoy = this.todayIso();
+    const futuras = absences.filter(
+      (a) => this.normalizeFechaKey(a.fecha) > hoy,
+    );
+    if (futuras.length) {
+      throw new BadRequestException(
+        'No se pueden justificar faltas de fechas futuras o que aún no han ocurrido',
+      );
+    }
+    const noHabiles = absences.filter(
+      (a) => !isWeekday(parseCalendarDate(this.normalizeFechaKey(a.fecha))),
+    );
+    if (noHabiles.length) {
+      throw new BadRequestException(
+        'No se pueden justificar ausencias registradas en fin de semana',
+      );
+    }
     const vencidas = absences.filter(
       (a) =>
         !this.isWithinJustificationDeadline(this.normalizeFechaKey(a.fecha), hoy),
@@ -1715,12 +1768,14 @@ export class AttendancesService {
       return absences;
     }
 
-    const fechaMin = this.oldestJustifiableDateIso();
+    const hoy = this.todayIso();
+    const fechaMin = this.oldestJustifiableDateIso(hoy);
     const qb = this.attendancesRepository
       .createQueryBuilder('a')
       .where('a.studentId = :studentId', { studentId: dto.studentId })
       .andWhere("a.estado = 'F'")
-      .andWhere('a.fecha >= :fechaMin', { fechaMin });
+      .andWhere('a.fecha >= :fechaMin', { fechaMin })
+      .andWhere('a.fecha <= :hoy', { hoy });
 
     if (dto.mes?.trim()) {
       const bounds = this.resolveMesBounds(dto.mes);
@@ -1822,11 +1877,56 @@ export class AttendancesService {
     return null;
   }
 
+  /** Periodo activo cuyo rango [inicio, fin] contiene la fecha (no solo el marcado «actual»). */
+  private async getPeriodoParaFecha(
+    fecha: string,
+  ): Promise<MaestroPeriodoAcademicoResponse | null> {
+    const anio = parseCalendarDate(fecha).getUTCFullYear();
+    const delAnio = await this.periodosService.findAll({
+      anioEscolar: anio,
+      activo: true,
+    });
+    const hit = this.periodoQueContieneFecha(fecha, delAnio);
+    if (hit) return hit;
+    const todos = await this.periodosService.findAll({ activo: true });
+    return this.periodoQueContieneFecha(fecha, todos);
+  }
+
+  private async loadPeriodosActivosEnRango(
+    desde: string,
+    hasta: string,
+  ): Promise<MaestroPeriodoAcademicoResponse[]> {
+    const y1 = parseCalendarDate(desde).getUTCFullYear();
+    const y2 = parseCalendarDate(hasta).getUTCFullYear();
+    const years = new Set([y1, y2]);
+    const merged: MaestroPeriodoAcademicoResponse[] = [];
+    const seen = new Set<number>();
+    for (const anioEscolar of years) {
+      const rows = await this.periodosService.findAll({
+        anioEscolar,
+        activo: true,
+      });
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        merged.push(row);
+      }
+    }
+    return merged;
+  }
+
+  private periodoQueContieneFecha(
+    fecha: string,
+    periodos: MaestroPeriodoAcademicoResponse[],
+  ): MaestroPeriodoAcademicoResponse | null {
+    return periodos.find((p) => fecha >= p.inicio && fecha <= p.fin) ?? null;
+  }
+
   private isWithinPeriodo(
     fecha: string,
     periodo: { inicio: string; fin: string } | null,
   ): boolean {
-    if (!periodo) return true;
+    if (!periodo) return false;
     return fecha >= periodo.inicio && fecha <= periodo.fin;
   }
 
@@ -1837,13 +1937,14 @@ export class AttendancesService {
     periodo: { id: number; nombre: string; inicio: string; fin: string } | null,
   ): DailyRegisterNavigation {
     const esFinDeSemana = !isWeekday(parseCalendarDate(fecha));
-    const fueraDePeriodo = !this.isWithinPeriodo(fecha, periodo);
+    const fueraDePeriodo = periodo == null;
     const esDiaClase = !esFinDeSemana && !feriado && !fueraDePeriodo;
 
+    const siguiente = this.shiftDate(fecha, 1);
     return {
       hoy,
       anterior: this.shiftDate(fecha, -1),
-      siguiente: this.shiftDate(fecha, 1),
+      siguiente: siguiente > hoy ? null : siguiente,
       esHoy: fecha === hoy,
       esFinDeSemana,
       esDiaClase,

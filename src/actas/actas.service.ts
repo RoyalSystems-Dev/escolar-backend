@@ -68,6 +68,22 @@ export class ActasService {
     private readonly cursosMaestrosService: CursosMaestrosService,
   ) {}
 
+  private claveActa(
+    nivel: string,
+    grado: string,
+    seccion: string,
+    bimestre: number,
+    anio: string,
+  ): string {
+    return [
+      nivel.trim().toLowerCase(),
+      grado.trim().toLowerCase().replace(/º/g, '°'),
+      seccion.trim().toUpperCase(),
+      bimestre,
+      anio.trim(),
+    ].join('|');
+  }
+
   async getBimestresDisponibles(): Promise<ActasBimestresDisponibles> {
     const anioEscolar = await this.periodosService.resolveAnioEscolarActual();
     const bimestreActual = await this.periodosService.resolveBimestreActual();
@@ -92,7 +108,14 @@ export class ActasService {
     if (query?.estado) qb.andWhere('a.estado = :estado', { estado: query.estado });
 
     const rows = await qb.getMany();
-    return rows.map((row) => this.toListItem(row));
+    const vistos = new Set<string>();
+    const unicas = rows.filter((row) => {
+      const key = this.claveActa(row.nivel, row.grado, row.seccion, row.bimestre, row.anio);
+      if (vistos.has(key)) return false;
+      vistos.add(key);
+      return true;
+    });
+    return unicas.map((row) => this.toListItem(row));
   }
 
   async findOne(id: number): Promise<ActaDetail> {
@@ -106,15 +129,19 @@ export class ActasService {
     const bimestresTerminados =
       await this.periodosService.resolveBimestresTerminados(+anio);
 
-    const existing = await this.actaRepo.findOne({
-      where: {
-        nivel: dto.nivel,
-        grado: dto.grado,
-        seccion: dto.seccion,
-        bimestre: dto.bimestre,
-        anio,
-      },
+    const nivel = dto.nivel.trim();
+    const grado = dto.grado.trim();
+    const seccion = dto.seccion.trim().toUpperCase();
+    const candidatas = await this.actaRepo.find({
+      where: { bimestre: dto.bimestre, anio },
+      order: { id: 'DESC' },
     });
+    const existing =
+      candidatas.find(
+        (row) =>
+          this.claveActa(row.nivel, row.grado, row.seccion, row.bimestre, row.anio) ===
+          this.claveActa(nivel, grado, seccion, dto.bimestre, anio),
+      ) ?? null;
 
     if (!existing && !bimestresTerminados.includes(dto.bimestre)) {
       const lista =
@@ -168,9 +195,9 @@ export class ActasService {
 
     const saved = await this.actaRepo.save(
       this.actaRepo.create({
-        nivel: dto.nivel,
-        grado: dto.grado,
-        seccion: dto.seccion,
+        nivel,
+        grado,
+        seccion,
         bimestre: dto.bimestre,
         anio,
         estado: 'generada',

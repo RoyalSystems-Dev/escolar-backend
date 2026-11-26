@@ -923,9 +923,12 @@ export class StudentsService implements OnModuleInit {
         .filter(Boolean)
         .join(' ');
     if (nombres && apellidos) {
-      const byNombre = await this.studentsRepository.findOne({
-        where: { nombre: nombres, apellido: apellidos },
-      });
+      const byNombre = await this.studentsRepository
+        .createQueryBuilder('s')
+        .where('LOWER(s.nombre) = LOWER(:nombres)', { nombres })
+        .andWhere('LOWER(s.apellido) = LOWER(:apellidos)', { apellidos })
+        .orderBy('s.id', 'ASC')
+        .getOne();
       if (byNombre) return byNombre;
     }
 
@@ -1053,6 +1056,23 @@ export class StudentsService implements OnModuleInit {
       return true;
     }
     return numeroExistente?.trim() === docNum;
+  }
+
+  async documentoDisponible(
+    numero?: string,
+    tipoDocumento?: string,
+  ): Promise<{ disponible: boolean; mensaje?: string }> {
+    const docNum = numero?.trim();
+    if (!docNum) return { disponible: true };
+    const tipo = tipoDocumento?.trim() || 'DNI';
+    const existing = await this.studentsRepository.findOne({
+      where: { dni: docNum, tipoDocumento: tipo },
+    });
+    if (!existing) return { disponible: true };
+    return {
+      disponible: false,
+      mensaje: 'Ya existe un estudiante con ese número de documento',
+    };
   }
 
   private async assertDocumentoMatriculaDisponible(
@@ -2483,6 +2503,29 @@ export class StudentsService implements OnModuleInit {
     return match ?? student;
   }
 
+  private colapsarHistorialDuplicado(students: Student[]): Student[] {
+    const byKey = new Map<string, Student>();
+    for (const student of students) {
+      const dni = student.dni?.trim();
+      const key = dni
+        ? `dni:${dni}`
+        : `nom:${student.nombre.trim().toLowerCase()}|${student.apellido.trim().toLowerCase()}`;
+      const prev = byKey.get(key);
+      if (!prev) {
+        byKey.set(key, student);
+        continue;
+      }
+      const prevActivo = prev.activo && (prev.estadoMatricula ?? 'activo') === 'activo';
+      const nextActivo = student.activo && (student.estadoMatricula ?? 'activo') === 'activo';
+      if ((!prevActivo && nextActivo) || (prevActivo === nextActivo && student.id > prev.id)) {
+        byKey.set(key, student);
+      }
+    }
+    return [...byKey.values()].sort((a, b) =>
+      `${a.apellido} ${a.nombre}`.localeCompare(`${b.apellido} ${b.nombre}`, 'es'),
+    );
+  }
+
   async findHistorialAcademicoList(
     search?: string,
     page = 1,
@@ -2519,11 +2562,10 @@ export class StudentsService implements OnModuleInit {
       });
     }
 
-    const total = await qb.getCount();
-    const students = await qb
-      .skip((safePage - 1) * safeSize)
-      .take(safeSize)
-      .getMany();
+    const encontrados = await qb.getMany();
+    const studentsAll = this.colapsarHistorialDuplicado(encontrados);
+    const total = studentsAll.length;
+    const students = studentsAll.slice((safePage - 1) * safeSize, safePage * safeSize);
 
     const ids = students.map((s) => s.id);
     const historialCounts = new Map<number, number>();

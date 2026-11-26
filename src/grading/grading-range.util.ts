@@ -27,7 +27,7 @@ export interface NotaRangeValidationResult {
 export function boundsFromConfig(config: GradingConfigDto): NotaRangeBounds {
   return {
     min: 0,
-    max: config.notaMaxima,
+    max: 20,
     notaMinimaAprobatoria: config.notaMinima,
   };
 }
@@ -65,7 +65,7 @@ export function validateNotaInRange(
       nota,
       min: bounds.min,
       max: bounds.max,
-      message: `La nota ${nota} está fuera del rango permitido (${bounds.min}–${bounds.max}).`,
+      message: `No se aceptan notas fuera de ${bounds.min} a ${bounds.max}.`,
     };
   }
   return { valid: true, nota, min: bounds.min, max: bounds.max };

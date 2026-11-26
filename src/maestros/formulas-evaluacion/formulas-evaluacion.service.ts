@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -125,10 +126,13 @@ export class FormulasEvaluacionMaestrosService {
 
     if (scored.length) return scored[0].row;
 
-    const fallback = rows.find((row) => row.esDefault) ?? rows[0];
+    const compatible = rows.filter((row) => this.nivelCompatible(row.nivel, nivel));
+    const fallback = compatible.find((row) => row.esDefault) ?? compatible[0];
     if (!fallback) {
       throw new NotFoundException(
-        'No hay fórmulas de evaluación configuradas. Registre una en Maestros.',
+        nivel
+          ? `No hay una fórmula de evaluación para ${nivel}. Regístrela en Maestros; no se usa la de otro nivel.`
+          : 'No hay fórmulas de evaluación configuradas. Registre una en Maestros.',
       );
     }
     return fallback;
@@ -139,6 +143,10 @@ export class FormulasEvaluacionMaestrosService {
     req: MaestrosAuthRequest,
   ): Promise<MaestroFormulaEvaluacionResponse> {
     const institutionId = requireMaestrosInstitutionId(req);
+    const nombre = dto.nombre?.trim() ?? '';
+    if (!nombre) throw new BadRequestException('El nombre de la fórmula es obligatorio.');
+    const codigo = dto.codigo?.trim() ?? '';
+    await this.assertCodigoLibre(institutionId, codigo);
     const componentes = normalizeComponentes(dto.componentes);
     const validation = validateComponentes(componentes);
     if (validation) throw new BadRequestException(validation);
@@ -150,8 +158,8 @@ export class FormulasEvaluacionMaestrosService {
     const saved = await this.repo.save(
       this.repo.create({
         institutionId,
-        nombre: dto.nombre.trim(),
-        codigo: dto.codigo?.trim() ?? '',
+        nombre,
+        codigo,
         nivel: dto.nivel?.trim() ?? '',
         grado: dto.grado?.trim() ?? '',
         curso: dto.curso?.trim() ?? '',
@@ -183,8 +191,16 @@ export class FormulasEvaluacionMaestrosService {
       current.componentes = componentes;
     }
 
-    if (dto.nombre !== undefined) current.nombre = dto.nombre.trim();
-    if (dto.codigo !== undefined) current.codigo = dto.codigo.trim();
+    if (dto.nombre !== undefined) {
+      const nombre = dto.nombre.trim();
+      if (!nombre) throw new BadRequestException('El nombre de la fórmula es obligatorio.');
+      current.nombre = nombre;
+    }
+    if (dto.codigo !== undefined) {
+      const codigo = dto.codigo.trim();
+      await this.assertCodigoLibre(institutionId, codigo, current.id);
+      current.codigo = codigo;
+    }
     if (dto.nivel !== undefined) current.nivel = dto.nivel.trim();
     if (dto.grado !== undefined) current.grado = dto.grado.trim();
     if (dto.curso !== undefined) current.curso = dto.curso.trim();
@@ -213,11 +229,10 @@ export class FormulasEvaluacionMaestrosService {
     assertMaestroBelongsToInstitution(current, institutionId);
     if (current.esDefault) {
       throw new BadRequestException(
-        'No se puede desactivar la fórmula predeterminada. Asigne otra como predeterminada primero.',
+        'No se puede eliminar la fórmula predeterminada. Asigne otra como predeterminada primero.',
       );
     }
-    current.activo = false;
-    await this.repo.save(current);
+    await this.repo.remove(current);
     return { deleted: true, id };
   }
 
@@ -249,6 +264,12 @@ export class FormulasEvaluacionMaestrosService {
     return score;
   }
 
+  private nivelCompatible(formulaNivel: string | null | undefined, pedido: string): boolean {
+    const formula = formulaNivel?.trim().toLowerCase() ?? '';
+    if (!formula) return true;
+    return formula === pedido.trim().toLowerCase();
+  }
+
   private async seedIfEmpty(): Promise<void> {
     if (await this.repo.count()) return;
     const institutionId = await resolveSeedInstitutionId(this.institutionRepo);
@@ -257,6 +278,18 @@ export class FormulasEvaluacionMaestrosService {
         this.repo.create({ ...item, institutionId }),
       ),
     );
+  }
+
+  private async assertCodigoLibre(
+    institutionId: number,
+    codigo: string,
+    exceptId?: number,
+  ): Promise<void> {
+    if (!codigo) return;
+    const dup = await this.repo.findOne({ where: { institutionId, codigo, activo: true } });
+    if (dup && dup.id !== exceptId) {
+      throw new ConflictException(`Ya existe una fórmula activa con el código "${codigo}".`);
+    }
   }
 
   private async getOrFail(id: number): Promise<MaestroFormulaEvaluacion> {

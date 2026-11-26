@@ -1,5 +1,14 @@
-import { Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
+import type { Request } from 'express';
+import { AuditLoggerService } from '../audit-logs/audit-logger.service';
 import { PeriodosAcademicosMaestrosService } from '../maestros/periodos-academicos/periodos-academicos.service';
+import { AniosEscolaresService } from '../maestros/anios-escolares/anios-escolares.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Sede } from './entities/sede.entity';
@@ -95,6 +104,9 @@ export class InstitutionService {
     private readonly gradingConfigService: GradingConfigService,
     @Inject(forwardRef(() => PeriodosAcademicosMaestrosService))
     private readonly periodosAcademicosService: PeriodosAcademicosMaestrosService,
+    @Inject(forwardRef(() => AniosEscolaresService))
+    private readonly aniosEscolaresService: AniosEscolaresService,
+    private readonly auditLogger: AuditLoggerService,
   ) {}
 
   async getConfig(institutionId: number) {
@@ -129,6 +141,9 @@ export class InstitutionService {
     if (dto.periodos?.length) {
       await this.periodosAcademicosService.syncFromInstitution(saved);
     }
+    if (dto.anio !== undefined || dto.periodos?.length) {
+      await this.aniosEscolaresService.syncVigenteDesdeInstitucion(saved.id);
+    }
     await this.gradingConfigService.refresh(saved.id);
     return saved;
   }
@@ -153,10 +168,57 @@ export class InstitutionService {
     return this.sedeRepo.save(entity);
   }
 
-  async updateCampus(id: number, dto: UpdateCampusDto) {
+  async updateCampus(id: number, dto: UpdateCampusDto, req?: Request) {
     const current = await this.getCampusOrFail(id);
+    const estadoAnterior = current.estado;
+
+    if (
+      dto.estado === 'inactivo' &&
+      current.estado === 'activo' &&
+      current.institutionId != null
+    ) {
+      const activas = await this.sedeRepo.count({
+        where: { institutionId: current.institutionId, estado: 'activo' },
+      });
+      if (activas <= 1) {
+        throw new BadRequestException(
+          'Debe existir al menos una sede activa por institución',
+        );
+      }
+    }
+
     const merged = this.sedeRepo.merge(current, dto);
-    return this.sedeRepo.save(merged);
+    const saved = await this.sedeRepo.save(merged);
+
+    if (
+      req &&
+      dto.estado !== undefined &&
+      dto.estado !== estadoAnterior
+    ) {
+      const inactivacion = saved.estado === 'inactivo';
+      this.auditLogger.logFromRequestContext(req, {
+        accion: 'configurar',
+        modulo: 'institucion',
+        entidad: 'sede',
+        entidadId: String(saved.id),
+        institutionId: saved.institutionId ?? undefined,
+        descripcion: inactivacion
+          ? `Inactivó la sede "${saved.nombre}" (${saved.codigo || 'sin código'})`
+          : `Reactivó la sede "${saved.nombre}" (${saved.codigo || 'sin código'})`,
+        nivel: inactivacion ? 'warning' : 'info',
+        resultado: 'success',
+        detalle: {
+          campusId: saved.id,
+          nombre: saved.nombre,
+          codigo: saved.codigo,
+          estadoAnterior,
+          estadoNuevo: saved.estado,
+          origen: 'configuracion_institucional',
+        },
+      });
+    }
+
+    return saved;
   }
 
   async removeCampus(id: number) {

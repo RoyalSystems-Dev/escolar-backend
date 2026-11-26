@@ -94,6 +94,12 @@ export class ConductIncidentsService {
     if (filters.estado && filters.estado !== 'todos') {
       listAll = listAll.filter((i) => i.estado === filters.estado);
     }
+    if (filters.nivel && filters.nivel !== 'todos') {
+      const nivelPorAlumno = new Map(
+        buildConductResumen(scopeAll).map((row) => [row.alumnoId, row.nivel]),
+      );
+      listAll = listAll.filter((item) => nivelPorAlumno.get(item.alumnoId) === filters.nivel);
+    }
 
     const alumnoIdsConIncidenciaFiltrada = new Set(
       listAll.map((i) => i.alumnoId),

@@ -35,7 +35,12 @@ export class DashboardService {
     const [estudiantesMatriculados, docentesActivos, asistencia, treasury, vacantes] =
       await Promise.all([
         this.studentRepo.count({ where: alumnoWhere }),
-        this.docenteRepo.count({ where: { estado: 'activo' } }),
+        this.docenteRepo.count({
+          where: {
+            estado: 'activo',
+            ...(institutionId === undefined ? {} : { institutionId }),
+          },
+        }),
         this.calcAsistenciaPromedio(anio, institutionId),
         this.treasuryService.getTreasurySummary(anio, institutionId),
         this.loadVacantesDisponibles(anio),

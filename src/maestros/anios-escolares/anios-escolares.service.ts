@@ -30,6 +30,8 @@ import {
   periodoSolapaExistentes,
 } from './anio-escolar-calendario-copy.util';
 import {
+  ANIO_ESCOLAR_REGISTRO_MAX,
+  ANIO_ESCOLAR_REGISTRO_MIN,
   ESTADO_ANIO_ESCOLAR_LABEL,
   PERMISO_CALENDARIZACION_GESTIONAR,
   PERMISO_CALENDARIZACION_VER,
@@ -43,6 +45,8 @@ import {
 } from './anio-escolar-periodos.util';
 import { Announcement } from '../../announcements/entities/announcement.entity';
 import { construirComunicadoCalendario } from './anio-escolar-comunicado.util';
+import { alinearAnioEscolarVigentePorFecha } from '../common/alinear-anio-escolar-vigente.util';
+import { formatIsoDate } from '../feriados/feriados.service';
 import {
   ActivarAnioEscolarDto,
   CerrarAnioEscolarDto,
@@ -85,11 +89,72 @@ export class AniosEscolaresService {
     private readonly auditLogger: AuditLoggerService,
   ) {}
 
+  /**
+   * Fuente de verdad: Administración → Institución (anio + periodos).
+   * Crea el año en maestros si falta y marca vigente el que coincide con institution.anio.
+   */
+  async syncVigenteDesdeInstitucion(institutionId: number): Promise<void> {
+    const institution = await this.institutionRepo.findOneBy({ id: institutionId });
+    if (!institution) return;
+
+    await this.ensureAnioEscolarRegistradoDesdeInstitucion(institution);
+
+    await alinearAnioEscolarVigentePorFecha(
+      this.anioRepo,
+      this.institutionRepo,
+      institutionId,
+      formatIsoDate(new Date()),
+    );
+  }
+
+  private async ensureAnioEscolarRegistradoDesdeInstitucion(
+    institution: Institution,
+  ): Promise<void> {
+    const anio = Number(institution.anio);
+    if (!Number.isFinite(anio) || anio < ANIO_ESCOLAR_REGISTRO_MIN || anio > ANIO_ESCOLAR_REGISTRO_MAX) {
+      return;
+    }
+
+    const existing = await this.anioRepo.findOne({
+      where: { institutionId: institution.id, anio, activo: true },
+    });
+    if (existing) return;
+
+    const fechas = fechasDefectoAnioEscolar(anio);
+    const tipoPeriodo =
+      (institution.tipoPeriodo as MaestroAnioEscolar['tipoPeriodo']) ?? 'bimestre';
+    await this.anioRepo.save(
+      this.anioRepo.create({
+        institutionId: institution.id,
+        anio,
+        ...fechas,
+        tipoPeriodo,
+        estado: 'activo',
+        vigente: false,
+        version: 1,
+        publicado: true,
+        motivo: 'Sincronizado desde configuración institucional',
+        activo: true,
+      }),
+    );
+    if (institution.periodos?.length) {
+      await this.periodosService.syncFromInstitution(institution);
+    }
+  }
+
   async getContext(ctx?: AnioEscolarActorContext) {
     const institution = await this.requireInstitution(ctx?.institutionId);
-    const vigente = await this.anioRepo.findOne({
+    await this.syncVigenteDesdeInstitucion(institution.id);
+    await this.dejarUnSoloAnioActivo(institution.id);
+    const vigenteRow = await this.anioRepo.findOne({
       where: { institutionId: institution.id, vigente: true, activo: true },
     });
+    const vigente =
+      vigenteRow &&
+      vigenteRow.anio >= ANIO_ESCOLAR_REGISTRO_MIN &&
+      vigenteRow.anio <= ANIO_ESCOLAR_REGISTRO_MAX
+        ? vigenteRow
+        : null;
     return {
       institucion: {
         id: institution.id,
@@ -121,12 +186,15 @@ export class AniosEscolaresService {
       return { items: [], total: 0, page, pageSize };
     }
     const institution = await this.requireInstitution(ctx.institutionId);
+    await this.syncVigenteDesdeInstitucion(institution.id);
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(50, Math.max(1, query.pageSize ?? 20));
     const qb = this.anioRepo
       .createQueryBuilder('a')
       .where('a.activo = true')
       .andWhere('a.institutionId = :institutionId', { institutionId: institution.id })
+      .andWhere('a.anio >= :anioMin', { anioMin: ANIO_ESCOLAR_REGISTRO_MIN })
+      .andWhere('a.anio <= :anioMax', { anioMax: ANIO_ESCOLAR_REGISTRO_MAX })
       .orderBy('a.anio', 'DESC')
       .skip((page - 1) * pageSize)
       .take(pageSize);
@@ -165,6 +233,14 @@ export class AniosEscolaresService {
 
   async create(dto: CreateAnioEscolarDto, ctx: AnioEscolarActorContext) {
     this.assertGestionar(ctx);
+    if (
+      dto.anio < ANIO_ESCOLAR_REGISTRO_MIN ||
+      dto.anio > ANIO_ESCOLAR_REGISTRO_MAX
+    ) {
+      throw new BadRequestException(
+        `El año escolar debe estar entre ${ANIO_ESCOLAR_REGISTRO_MIN} y ${ANIO_ESCOLAR_REGISTRO_MAX}.`,
+      );
+    }
     const institution = await this.requireInstitution(ctx.institutionId);
     this.validarFechas(dto.fechaInicio, dto.fechaFin);
     this.validarAnioEnRango(dto.anio, dto.fechaInicio, dto.fechaFin);
@@ -849,6 +925,14 @@ export class AniosEscolaresService {
       .where('institutionId = :institutionId', { institutionId: row.institutionId })
       .andWhere('id <> :id', { id: row.id })
       .execute();
+    await anios
+      .createQueryBuilder()
+      .update(MaestroAnioEscolar)
+      .set({ estado: 'planificado' })
+      .where('institutionId = :institutionId', { institutionId: row.institutionId })
+      .andWhere('id <> :id', { id: row.id })
+      .andWhere("estado = 'activo'")
+      .execute();
 
     const anterior = row.estado;
     row.estado = 'activo';
@@ -915,6 +999,19 @@ export class AniosEscolaresService {
         );
       }
     }
+  }
+
+  private async dejarUnSoloAnioActivo(institutionId: number): Promise<void> {
+    const activos = await this.anioRepo.find({
+      where: { institutionId, estado: 'activo', activo: true },
+    });
+    if (activos.length <= 1) return;
+    const conservar =
+      activos.find((row) => row.vigente) ??
+      [...activos].sort((a, b) => b.anio - a.anio)[0];
+    const demover = activos.filter((row) => row.id !== conservar.id).map((row) => row.id);
+    if (!demover.length) return;
+    await this.anioRepo.update(demover, { estado: 'planificado', vigente: false });
   }
 
   private validarFechas(inicio: string, fin: string): void {

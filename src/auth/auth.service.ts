@@ -1,6 +1,9 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
+import { Repository } from 'typeorm';
 import { AuditLoggerService } from '../audit-logs/audit-logger.service';
+import { Institution } from '../institution/entities/institution.entity';
 import {
   parseActorFromRequest,
   sanitizeAuditPayload,
@@ -18,6 +21,7 @@ interface AuthUserSource {
   email: string;
   username: string;
   estado: string;
+  sede?: string;
   ultimoAcceso?: Date | string | null;
 }
 
@@ -27,6 +31,8 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly userRolesService: UserRolesService,
     private readonly auditLogger: AuditLoggerService,
+    @InjectRepository(Institution)
+    private readonly institutionRepo: Repository<Institution>,
   ) {}
 
   async login(dto: LoginDto, req: Request) {
@@ -76,33 +82,22 @@ export class AuthService {
       refreshToken: `refresh_${user.id}_${now}`,
       expiresIn: 86400,
       tokenType: 'Bearer',
-      user: this.buildAuthUser(user, effective),
+      user: await this.buildAuthUser(user, effective),
     };
   }
 
   async getSession(userId: number) {
-    const user = await this.usersService.findOne(userId);
-    if (!user || user.estado !== 'activo') {
+    const authUser = await this.usersService.findAuthUserById(userId);
+    if (!authUser || authUser.estado !== 'activo') {
       throw new UnauthorizedException('Usuario no encontrado o inactivo');
     }
-    const authUser = await this.usersService.findAuthUserById(userId);
     const effective = await this.userRolesService.resolveEffectiveAuth(userId);
     return {
       accessToken: null,
       refreshToken: null,
       expiresIn: 0,
       tokenType: 'Bearer',
-      user: this.buildAuthUser(
-        authUser ?? {
-          id: userId,
-          nombres: user.nombres,
-          apellidos: user.apellidos,
-          email: user.email,
-          username: user.username,
-          estado: user.estado,
-        },
-        effective,
-      ),
+      user: await this.buildAuthUser(authUser, effective),
     };
   }
 
@@ -141,7 +136,7 @@ export class AuthService {
       refreshToken: `refresh_${user.id}_${now}`,
       expiresIn: 86400,
       tokenType: 'Bearer',
-      user: this.buildAuthUser(user as AuthUserSource, effective),
+      user: await this.buildAuthUser(user as AuthUserSource, effective),
     };
   }
 
@@ -167,7 +162,7 @@ export class AuthService {
     return `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}.mock_signature`;
   }
 
-  private buildAuthUser(
+  private async buildAuthUser(
     user: AuthUserSource,
     effective: Awaited<ReturnType<UserRolesService['resolveEffectiveAuth']>>,
   ) {
@@ -175,6 +170,22 @@ export class AuthService {
       user.ultimoAcceso instanceof Date
         ? user.ultimoAcceso.toISOString()
         : user.ultimoAcceso ?? new Date().toISOString();
+
+    let institutionNombre: string | null = null;
+    let institutionSiglas: string | null = null;
+    const instId = effective.institutionId;
+    if (instId != null && instId > 0) {
+      const inst = await this.institutionRepo.findOne({
+        where: { id: instId },
+        select: { id: true, nombre: true, siglas: true },
+      });
+      if (inst) {
+        institutionNombre = inst.nombre?.trim() || null;
+        institutionSiglas = inst.siglas?.trim() || null;
+      }
+    }
+
+    const sedeNombre = user.sede?.trim() || null;
 
     return {
       id: String(user.id),
@@ -192,6 +203,10 @@ export class AuthService {
       ambitos: effective.ambitos,
       rolPrincipal: effective.primaryRole,
       institutionId: effective.institutionId,
+      institutionNombre,
+      institutionSiglas,
+      sedeNombre,
+      sedeId: sedeNombre,
       permisos: effective.permisos,
       esAdmin: effective.esAdmin,
       estado: user.estado,

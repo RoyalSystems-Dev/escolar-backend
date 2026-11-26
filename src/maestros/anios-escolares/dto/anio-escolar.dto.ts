@@ -5,11 +5,14 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
 import {
+  ANIO_ESCOLAR_REGISTRO_MAX,
+  ANIO_ESCOLAR_REGISTRO_MIN,
   ESTADOS_ANIO_ESCOLAR,
   TIPOS_PERIODO_ANIO_ESCOLAR,
 } from '../anio-escolar.constants';
@@ -17,7 +20,8 @@ import {
 export class CreateAnioEscolarDto {
   @Type(() => Number)
   @IsInt()
-  @Min(2000)
+  @Min(ANIO_ESCOLAR_REGISTRO_MIN)
+  @Max(ANIO_ESCOLAR_REGISTRO_MAX)
   anio: number;
 
   @IsString()
@@ -165,6 +169,17 @@ export class PublicarComunicadoCalendarioDto {
 }
 
 export class ListAniosEscolaresQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  institutionId?: number;
+
+  /** Token de recarga del selector de IE; lo envía el interceptor y no filtra el listado. */
+  @IsOptional()
+  @IsString()
+  _tenant?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -48,6 +48,7 @@ import {
   PERMISO_TRASLADOS_VER,
 } from './transfer.constants';
 import {
+  anioEscolarOperativo,
   codigoTraslado,
   hoyLima,
   iePuedeVerSolicitud,
@@ -118,8 +119,8 @@ export class TransferRequestService {
     const scope = await this.resolveScope(ctx);
     const institution = scope.institution;
     const anioEscolar = institution
-      ? Number(institution.anio) || new Date().getFullYear()
-      : new Date().getFullYear();
+      ? anioEscolarOperativo(institution.anio)
+      : anioEscolarOperativo(undefined);
     return {
       institucion: institution
         ? {
@@ -339,8 +340,8 @@ export class TransferRequestService {
     const rows = await this.studentRepo
       .createQueryBuilder('s')
       .where('s.activo = true')
-      .andWhere(`s.estadoMatricula = 'activo'`)
-      .andWhere('s.institutionId = :institutionId', { institutionId: institution.id })
+      .andWhere(`s."estadoMatricula" = 'activo'`)
+      .andWhere('s."institutionId" = :institutionId', { institutionId: institution.id })
       .andWhere(
         `(s.dni ILIKE :q OR s.nombre ILIKE :q OR s.apellido ILIKE :q OR s.codigo ILIKE :q)`,
         { q: `%${term}%` },
@@ -373,7 +374,7 @@ export class TransferRequestService {
       .createQueryBuilder('i')
       .where('i.id <> :own', { own: institution.id })
       .andWhere(
-        `(i.nombre ILIKE :q OR i.codigoModular ILIKE :q OR i.siglas ILIKE :q)`,
+        `(i.nombre ILIKE :q OR i."codigoModular" ILIKE :q OR i.siglas ILIKE :q)`,
         { q: `%${term}%` },
       )
       .orderBy('i.nombre', 'ASC')
@@ -413,7 +414,7 @@ export class TransferRequestService {
         const destinoIe = await this.resolverDestino(manager, dto.ieDestinoCodigoModular, institution);
         this.assertPlazo(dto.plazoHasta);
 
-        const anio = Number(institution.anio) || new Date().getFullYear();
+        const anio = anioEscolarOperativo(institution.anio);
         const destino = destinoIe.codigoModular.trim();
         const duplicada = await requests.findOne({
           where: {

@@ -15,6 +15,9 @@ import type { Request } from 'express';
 import { CurriculaService } from './curricula.service';
 import {
   CreateCurriculumAreaDto,
+  CreateCurriculumCapacidadDto,
+  CreateCurriculumCompetenciaDto,
+  CopyCurriculumDto,
   CreateCurriculumDto,
   CreateCurriculumSubjectDto,
   CreateTeacherAssignmentDto,
@@ -164,8 +167,17 @@ export class CurriculaController {
 
   @Post(':id/copy')
   @RequirePermiso(...PERMISOS_CURRICULA_GESTION)
-  copyCurriculum(@Req() req: AuthRequest, @Param('id', ParseIntPipe) id: number) {
-    return this.curriculaService.copyCurriculum(id, scopeFromCurriculaRequest(req));
+  copyCurriculum(
+    @Req() req: AuthRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CopyCurriculumDto,
+  ) {
+    return this.curriculaService.copyCurriculum(
+      id,
+      scopeFromCurriculaRequest(req),
+      dto?.anioDestino,
+      dto?.seccionDestino,
+    );
   }
 
   @Get('areas/list')
@@ -215,6 +227,30 @@ export class CurriculaController {
     @Body() dto: UpdateCurriculumSubjectDto,
   ) {
     return this.curriculaService.updateSubject(id, dto);
+  }
+
+  @Post('competencias')
+  @RequirePermiso(...PERMISOS_CURRICULA_GESTION)
+  createCompetencia(
+    @Req() req: AuthRequest,
+    @Body() dto: CreateCurriculumCompetenciaDto,
+  ) {
+    return this.curriculaService.createCompetencia(
+      dto,
+      scopeFromCurriculaRequest(req),
+    );
+  }
+
+  @Post('capacidades')
+  @RequirePermiso(...PERMISOS_CURRICULA_GESTION)
+  createCapacidad(
+    @Req() req: AuthRequest,
+    @Body() dto: CreateCurriculumCapacidadDto,
+  ) {
+    return this.curriculaService.createCapacidad(
+      dto,
+      scopeFromCurriculaRequest(req),
+    );
   }
 
   @Get('asignacion/context')
